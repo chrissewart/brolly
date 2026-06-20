@@ -213,11 +213,11 @@ function renderDaily(d, h){
   });
   // Triple-tap the last day card to cycle demo scenarios
   el.querySelector('.day:last-child').addEventListener('click', () => {
-    demoTapCount++;
-    clearTimeout(demoTapTimer);
-    demoTapTimer = setTimeout(() => { demoTapCount = 0; }, 500);
-    if (demoTapCount < 3) return;
-    demoTapCount = 0;
+    const now = Date.now();
+    demoTaps = demoTaps.filter(t => now - t < 800);
+    demoTaps.push(now);
+    if (demoTaps.length < 3) return;
+    demoTaps = [];
     demoIdx = (demoIdx + 1) % DEMO_SCENARIOS.length;
     loadDemo(DEMO_SCENARIOS[demoIdx]);
   });
@@ -405,7 +405,7 @@ async function loadDemo(scenario) {
   document.getElementById('updated').textContent = `⚠ demo: ${scenario.label}`;
 }
 
-let demoTapCount = 0, demoTapTimer = null;
+let demoTaps = [];
 
 function updateDetail(){
   const h=WX.hourly, i=detailIdx, dt=new Date(h.time[i]);
