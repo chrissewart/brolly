@@ -1,21 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="80" fill="#10222e"/>
-  <!-- canopy dome -->
-  <path d="M256,88 C144,88 68,168 68,256 L444,256 Z" fill="#f7f8f7"/>
-  <!-- rib lines -->
-  <line x1="256" y1="88" x2="256" y2="256" stroke="#10222e" stroke-width="8"/>
-  <line x1="256" y1="148" x2="68" y2="256"  stroke="#10222e" stroke-width="6" opacity="0.5"/>
-  <line x1="256" y1="148" x2="444" y2="256" stroke="#10222e" stroke-width="6" opacity="0.5"/>
-  <line x1="256" y1="108" x2="160" y2="256" stroke="#10222e" stroke-width="5" opacity="0.3"/>
-  <line x1="256" y1="108" x2="352" y2="256" stroke="#10222e" stroke-width="5" opacity="0.3"/>
+  <rect width="512" height="512" rx="96" fill="#10222e"/>
+  <!-- canopy: solid dome with 3 scallops along the bottom edge -->
+  <path d="M256,76 C134,76 50,162 50,254
+           Q118.7,212 187.3,254 Q256,212 324.7,254 Q393.3,212 462,254
+           C462,162 378,76 256,76 Z"
+        fill="#f7f8f7"/>
   <!-- stem -->
-  <rect x="249" y="256" width="14" height="128" rx="7" fill="#f7f8f7"/>
+  <rect x="246" y="254" width="20" height="136" rx="10" fill="#f7f8f7"/>
   <!-- hook -->
-  <path d="M249,384 C249,418 264,432 288,432 C314,432 326,416 326,400"
-        fill="none" stroke="#f7f8f7" stroke-width="14" stroke-linecap="round"/>
-  <!-- rain drops -->
-  <ellipse cx="148" cy="308" rx="7" ry="10" fill="#0d7fa3"/>
-  <ellipse cx="210" cy="340" rx="7" ry="10" fill="#0d7fa3"/>
-  <ellipse cx="302" cy="308" rx="7" ry="10" fill="#0d7fa3"/>
-  <ellipse cx="364" cy="340" rx="7" ry="10" fill="#0d7fa3"/>
+  <path d="M256,390 Q256,434 292,434 Q330,434 330,402"
+        fill="none" stroke="#f7f8f7" stroke-width="20" stroke-linecap="round"/>
+  <!-- rain -->
+  <circle cx="148" cy="328" r="13" fill="#0d7fa3"/>
+  <circle cx="256" cy="352" r="13" fill="#0d7fa3"/>
+  <circle cx="364" cy="328" r="13" fill="#0d7fa3"/>
 </svg>

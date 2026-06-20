@@ -1,7 +1,7 @@
 {
-  "name": "Brolly — UK Runner's Weather",
+  "name": "Brolly",
   "short_name": "Brolly",
-  "description": "UK weather for runners",
+  "description": "leave it at home",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
