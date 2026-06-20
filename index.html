@@ -20,9 +20,10 @@
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   }
   *{box-sizing:border-box;margin:0}
+  html,body{height:100dvh;overflow:hidden}
   body{background:var(--paper);color:var(--ink);font-family:var(--sans);
-       -webkit-font-smoothing:antialiased;padding-bottom:2rem;overscroll-behavior:none}
-  .wrap{max-width:680px;margin:0 auto;padding:0 12px}
+       -webkit-font-smoothing:antialiased;overscroll-behavior:none}
+  .wrap{max-width:680px;margin:0 auto;padding:0 12px;height:100%;display:flex;flex-direction:column}
 
   header{padding:14px 0 6px;display:flex;align-items:baseline;justify-content:space-between;gap:8px}
   h1{font-size:1.1rem;font-weight:650}
@@ -52,8 +53,7 @@
   .dayhead{position:sticky;top:0;background:var(--paper);z-index:5;
            padding:14px 0 6px;font-size:.78rem;font-weight:700;
            text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
-           border-bottom:1px solid var(--rule);display:flex;justify-content:space-between}
-  .dayhead a{color:var(--rain);text-decoration:none;font-weight:600;letter-spacing:.04em}
+           border-bottom:1px solid var(--rule)}
   .hr{display:grid;grid-template-columns:3.4em 2em 3em 3em 3.6em 4.8em;
       align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid #ebeeec;
       font-family:var(--mono);font-size:1.05rem;cursor:pointer;
@@ -73,6 +73,7 @@
   .hr .wd.high small{color:var(--wind)}
   .arrow{display:inline-block;color:var(--faint)}
   .hr .wd.high .arrow{color:var(--wind)}
+  #hourly{flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding-bottom:1.5rem}
   #status{font-family:var(--mono);font-size:.8rem;color:var(--faint);padding:24px 0;text-align:center}
   .endnote{font-size:.72rem;color:var(--faint);margin-top:14px;text-align:center}
 
@@ -111,7 +112,6 @@
   <div class="legend"><b>━ rain %</b> &nbsp; <i>━ temp</i></div>
   <p id="summary"></p>
   <div id="hourly"><div id="status">Locating…</div></div>
-  <p class="endnote">Tap an hour for forecast map + scrub · tap a day for its outlook</p>
 </div>
 
 <div id="detail">
@@ -149,6 +149,8 @@ const DEMO_SCENARIOS = [
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
 let WX=null, POS=null, demoIdx=0;
+let _nowOverride = null;
+function getNow() { return _nowOverride ? new Date(_nowOverride) : new Date(); }
 
 function getPosition(){
   return new Promise(res=>{
@@ -238,11 +240,10 @@ function defaultSummary(h){
 let HOURS=[];
 function renderHourly(h){
   const out = document.getElementById("hourly");
-  const now = new Date(); now.setMinutes(0,0,0);
+  const cur = getNow(); cur.setMinutes(0,0,0);
   let html = "", lastDay = "";
-  const start = Math.max(h.time.findIndex(t=>new Date(t)>=now),0);
-  /* chop at the end of TOMORROW so day-after never half-appears.
-     => detail/summary owns days 2+, hourly list owns today + tomorrow. */
+  const start = Math.max(h.time.findIndex(t=>new Date(t)>=cur),0);
+  /* chop at the end of day+1 so day-after never half-appears */
   const cutoffDate = new Date(new Date(h.time[start]).getTime()+2*86400e3).toDateString();
   HOURS=[];
   for(let i=start; i<h.time.length; i++){
@@ -251,9 +252,8 @@ function renderHourly(h){
     const dayKey = dt.toDateString();
     if(dayKey!==lastDay){
       lastDay = dayKey;
-      const label = dayKey===new Date().toDateString() ? "Today" : DAYS[dt.getDay()]+" "+dt.getDate();
-      html += `<div class="dayhead" data-date="${h.time[i].slice(0,10)}">
-        <span>${label}</span><a href="#" class="toplink">↑ top</a></div>`;
+      const label = dayKey===getNow().toDateString() ? "Today" : DAYS[dt.getDay()]+" "+dt.getDate();
+      html += `<div class="dayhead" data-date="${h.time[i].slice(0,10)}"><span>${label}</span></div>`;
     }
     const p = h.precipitation_probability[i];
     const temp = Math.round(h.temperature_2m[i]);
@@ -269,10 +269,8 @@ function renderHourly(h){
       <span class="wd${high?" high":""}"><span class="arrow" style="transform:rotate(${(h.wind_direction_10m[i]+180)%360}deg)">↑</span> ${ws}<small>/${wg}</small></span>
     </div>`;
   }
-  out.innerHTML = html;
+  out.innerHTML = html + '<p class="endnote">Tap an hour for forecast map · tap Today to scroll back</p>';
   out.querySelectorAll(".hr").forEach(row=>row.addEventListener("click",()=>openDetail(+row.dataset.i)));
-  out.querySelectorAll(".toplink").forEach(a=>
-    a.addEventListener("click",e=>{e.preventDefault();window.scrollTo({top:0,behavior:"smooth"});}));
 }
 
 const GRID_N = 15, GRID_STEP = 0.025;
@@ -295,22 +293,6 @@ function buildGridPoints(pos) {
   return pts;
 }
 
-function rebaseTimes(times, refHourly) {
-  const z = n => String(n).padStart(2, '0');
-  const [sy, sm, sd] = refHourly.slice(0, 10).split('-').map(Number);
-  const today = new Date();
-  const diffDays = Math.round(
-    (new Date(today.getFullYear(), today.getMonth(), today.getDate()) -
-     new Date(sy, sm - 1, sd)) / 86400e3
-  );
-  return times.map(t => {
-    const isDate = t.length === 10;
-    const [y, mo, d] = (isDate ? t : t.slice(0, 10)).split('-').map(Number);
-    const nd = new Date(y, mo - 1, d + diffDays);
-    const ds = `${nd.getFullYear()}-${z(nd.getMonth()+1)}-${z(nd.getDate())}`;
-    return isDate ? ds : `${ds}T${t.slice(11)}`;
-  });
-}
 
 async function loadPrecipGrid(pos) {
   const points = buildGridPoints(pos);
@@ -375,6 +357,7 @@ function renderAll() {
 async function loadDemo(scenario) {
   const tag = document.querySelector('#place small');
   if (!scenario) {
+    _nowOverride = null;
     tag.textContent = 'UKMO';
     document.getElementById('updated').textContent = 'reloading…';
     try { WX = await loadForecast(POS); } catch(e) { WX = buildSampleData(); }
@@ -393,11 +376,9 @@ async function loadDemo(scenario) {
     fetch(`./tests/fixtures/${scenario.wx}.json`).then(r => r.json()),
     fetch(`./tests/fixtures/${scenario.grid}.json`).then(r => r.json()),
   ]);
-  const ref = wx.hourly.time[0];
-  wx.hourly.time = rebaseTimes(wx.hourly.time, ref);
-  wx.daily.time  = rebaseTimes(wx.daily.time,  ref);
+  _nowOverride = wx.hourly.time[0];  // time-travel to midnight of the fixture day
   WX = wx;
-  PRECIP_GRID = { times: rebaseTimes(grd.times, grd.times[0]), values: grd.values, points: buildGridPoints(POS) };
+  PRECIP_GRID = { times: grd.times, values: grd.values, points: buildGridPoints(POS) };
   gridRects.forEach(r => dmap?.removeLayer(r));
   gridRects = [];
   if (dmap) initGridRects();
@@ -409,7 +390,7 @@ let demoTaps = [];
 
 function updateDetail(){
   const h=WX.hourly, i=detailIdx, dt=new Date(h.time[i]);
-  const isToday = dt.toDateString()===new Date().toDateString();
+  const isToday = dt.toDateString()===getNow().toDateString();
   const ws=Math.round(h.wind_speed_10m[i]), wg=Math.round(h.wind_gusts_10m[i]);
   document.getElementById("dwhen").textContent =
     (isToday?"Today":DAYS[dt.getDay()])+" "+String(dt.getHours()).padStart(2,"0")+":00";
@@ -438,8 +419,8 @@ function initSwipeBack(){
 function initScrub(){
   const track=document.getElementById("scrubtrack"), knob=document.getElementById("knob");
   let active=false,offset=0,timer=null,accum=0;
-  const minI=HOURS[0], maxI=HOURS[HOURS.length-1];
   function step(){
+    const minI=HOURS[0]??0, maxI=HOURS[HOURS.length-1]??0;
     accum+=offset*0.5; const whole=Math.trunc(accum);
     if(whole!==0){ accum-=whole; detailIdx=Math.max(minI,Math.min(maxI,detailIdx+whole)); updateDetail(); }
     knob.textContent = offset===0?"∙":(offset>0?"▶":"◀")+" "+Math.abs(Math.round(offset*5))+"×";
