@@ -142,7 +142,13 @@ import { ic, lbl, isRainCode, DROP, rainBars, DAYS, PODS,
 
 const FALLBACK = {lat:53.4631, lon:-2.2913, name:"Old Trafford"};
 const WIND_HIGH = 30;
-let WX=null, POS=null;
+const DEMO_SCENARIOS = [
+  null,
+  { label:'Storm', wx:'manchester-storm-2025-01-24', grid:'grid-storm-2025-01-24' },
+  { label:'Wet',   wx:'manchester-wet-2023-10-20',   grid:'grid-wet-2023-10-20' },
+  { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
+];
+let WX=null, POS=null, demoIdx=0;
 
 function getPosition(){
   return new Promise(res=>{
@@ -267,14 +273,39 @@ function precipOpacity(mm) {
   return Math.min(0.85, 0.15 + Math.sqrt(mm / 5) * 0.7);
 }
 
-async function loadPrecipGrid(pos) {
+function buildGridPoints(pos) {
   const half = Math.floor(GRID_N / 2) * GRID_STEP;
-  const lats = [], lons = [];
+  const pts = [];
   for (let r = 0; r < GRID_N; r++)
-    for (let c = 0; c < GRID_N; c++) {
-      lats.push((pos.lat - half + r * GRID_STEP).toFixed(4));
-      lons.push((pos.lon - half + c * GRID_STEP).toFixed(4));
-    }
+    for (let c = 0; c < GRID_N; c++)
+      pts.push({
+        lat: +(pos.lat - half + r * GRID_STEP).toFixed(4),
+        lon: +(pos.lon - half + c * GRID_STEP).toFixed(4),
+      });
+  return pts;
+}
+
+function rebaseTimes(times, refHourly) {
+  const z = n => String(n).padStart(2, '0');
+  const [sy, sm, sd] = refHourly.slice(0, 10).split('-').map(Number);
+  const today = new Date();
+  const diffDays = Math.round(
+    (new Date(today.getFullYear(), today.getMonth(), today.getDate()) -
+     new Date(sy, sm - 1, sd)) / 86400e3
+  );
+  return times.map(t => {
+    const isDate = t.length === 10;
+    const [y, mo, d] = (isDate ? t : t.slice(0, 10)).split('-').map(Number);
+    const nd = new Date(y, mo - 1, d + diffDays);
+    const ds = `${nd.getFullYear()}-${z(nd.getMonth()+1)}-${z(nd.getDate())}`;
+    return isDate ? ds : `${ds}T${t.slice(11)}`;
+  });
+}
+
+async function loadPrecipGrid(pos) {
+  const points = buildGridPoints(pos);
+  const lats = points.map(p => p.lat.toFixed(4));
+  const lons = points.map(p => p.lon.toFixed(4));
   const url = new URL('https://api.open-meteo.com/v1/forecast');
   Object.entries({
     latitude: lats.join(','), longitude: lons.join(','),
@@ -282,11 +313,7 @@ async function loadPrecipGrid(pos) {
     forecast_days: 2, timezone: 'auto',
   }).forEach(([k,v]) => url.searchParams.set(k,v));
   const data = await fetch(url).then(r => r.json());
-  PRECIP_GRID = {
-    times:  data[0].hourly.time,
-    values: data.map(d => d.hourly.precipitation),
-    points: lats.map((lat, i) => ({ lat: +lat, lon: +lons[i] })),
-  };
+  PRECIP_GRID = { times: data[0].hourly.time, values: data.map(d => d.hourly.precipitation), points };
   initGridRects();
   if (document.getElementById('detail').classList.contains('open')) updateDetail();
 }
@@ -328,6 +355,56 @@ function openDetail(i){
 }
 function closeDetail(){ document.getElementById("detail").classList.remove("open"); }
 document.getElementById("dclose").onclick = closeDetail;
+
+function renderAll() {
+  renderDaily(WX.daily, WX.hourly);
+  defaultSummary(WX.hourly);
+  renderHourly(WX.hourly);
+}
+
+async function loadDemo(scenario) {
+  const tag = document.querySelector('#place small');
+  if (!scenario) {
+    tag.textContent = 'UKMO';
+    document.getElementById('updated').textContent = 'reloading…';
+    try { WX = await loadForecast(POS); } catch(e) { WX = buildSampleData(); }
+    PRECIP_GRID = null;
+    gridRects.forEach(r => dmap?.removeLayer(r));
+    gridRects = [];
+    loadPrecipGrid(POS).catch(() => {});
+    renderAll();
+    document.getElementById('updated').textContent =
+      'updated ' + new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+    return;
+  }
+  tag.textContent = `Test: ${scenario.label}`;
+  document.getElementById('updated').textContent = 'loading demo…';
+  const [wx, grd] = await Promise.all([
+    fetch(`./tests/fixtures/${scenario.wx}.json`).then(r => r.json()),
+    fetch(`./tests/fixtures/${scenario.grid}.json`).then(r => r.json()),
+  ]);
+  const ref = wx.hourly.time[0];
+  wx.hourly.time = rebaseTimes(wx.hourly.time, ref);
+  wx.daily.time  = rebaseTimes(wx.daily.time,  ref);
+  WX = wx;
+  PRECIP_GRID = { times: rebaseTimes(grd.times, grd.times[0]), values: grd.values, points: buildGridPoints(POS) };
+  gridRects.forEach(r => dmap?.removeLayer(r));
+  gridRects = [];
+  if (dmap) initGridRects();
+  renderAll();
+  document.getElementById('updated').textContent = `⚠ demo: ${scenario.label}`;
+}
+
+let tapCount = 0, tapTimer = null;
+document.getElementById('place').addEventListener('click', () => {
+  tapCount++;
+  clearTimeout(tapTimer);
+  tapTimer = setTimeout(() => { tapCount = 0; }, 600);
+  if (tapCount < 5) return;
+  tapCount = 0;
+  demoIdx = (demoIdx + 1) % DEMO_SCENARIOS.length;
+  loadDemo(DEMO_SCENARIOS[demoIdx]);
+});
 
 function updateDetail(){
   const h=WX.hourly, i=detailIdx, dt=new Date(h.time[i]);
@@ -392,9 +469,7 @@ function initScrub(){
   let sample=false;
   try{ document.getElementById("status").textContent="Fetching UKMO forecast…"; WX=await loadForecast(POS); }
   catch(e){ WX=buildSampleData(); sample=true; }
-  renderDaily(WX.daily,WX.hourly);
-  defaultSummary(WX.hourly);
-  renderHourly(WX.hourly);
+  renderAll();
   document.getElementById("updated").textContent = sample?"⚠ sample data"
     :"updated "+new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
 })();

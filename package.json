@@ -6,7 +6,8 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/weather.test.mjs",
-    "generate-icons": "node scripts/generate-icons.mjs"
+    "generate-icons": "node scripts/generate-icons.mjs",
+    "fetch-demo-fixtures": "node scripts/fetch-demo-fixtures.mjs"
   },
   "devDependencies": {
     "sharp": "^0.33.5"
