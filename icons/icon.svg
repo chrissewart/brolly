@@ -1,17 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#10222e"/>
-  <!-- canopy: solid dome with 3 scallops along the bottom edge -->
-  <path d="M256,76 C134,76 50,162 50,254
-           Q118.7,212 187.3,254 Q256,212 324.7,254 Q393.3,212 462,254
-           C462,162 378,76 256,76 Z"
-        fill="#f7f8f7"/>
+  <!-- white background -->
+  <rect width="512" height="512" rx="96" fill="#f7f8f7"/>
+  <!-- canopy: arc whose radius matches the icon corner radius circle (r≈416) -->
+  <!-- centre of curvature at (256, 470) gives a gentle arc fitting the icon shape -->
+  <path d="M60,268 A196,196,0,0,1,452,268
+           Q385,228 318,268 Q287,228 256,268 Q225,228 194,268 Q127,228 60,268 Z"
+        fill="#10222e"/>
   <!-- stem -->
-  <rect x="246" y="254" width="20" height="136" rx="10" fill="#f7f8f7"/>
+  <rect x="246" y="268" width="20" height="126" rx="10" fill="#10222e"/>
   <!-- hook -->
-  <path d="M256,390 Q256,434 292,434 Q330,434 330,402"
-        fill="none" stroke="#f7f8f7" stroke-width="20" stroke-linecap="round"/>
-  <!-- rain -->
-  <circle cx="148" cy="328" r="13" fill="#0d7fa3"/>
-  <circle cx="256" cy="352" r="13" fill="#0d7fa3"/>
-  <circle cx="364" cy="328" r="13" fill="#0d7fa3"/>
+  <path d="M256,394 Q256,436 292,436 Q330,436 330,406"
+        fill="none" stroke="#10222e" stroke-width="20" stroke-linecap="round"/>
+  <!-- rain drops: 5 drops in two staggered rows -->
+  <circle cx="120" cy="336" r="13" fill="#0d7fa3"/>
+  <circle cx="200" cy="364" r="13" fill="#0d7fa3"/>
+  <circle cx="312" cy="364" r="13" fill="#0d7fa3"/>
+  <circle cx="392" cy="336" r="13" fill="#0d7fa3"/>
+  <circle cx="256" cy="348" r="13" fill="#0d7fa3"/>
 </svg>

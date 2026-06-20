@@ -89,9 +89,6 @@
   .dstat .l{font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;color:var(--faint)}
   #dcond{text-align:center;font-size:1rem;padding-bottom:10px}
   #dmap{flex:1;position:relative}
-  #noradar{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-           background:rgba(247,248,247,.55);z-index:500;font-family:var(--mono);
-           font-size:.78rem;color:var(--ink);text-align:center;pointer-events:none}
   #scrub{height:84px;display:flex;align-items:center;justify-content:center;
          touch-action:none;user-select:none;position:relative;border-top:1px solid var(--rule)}
   #scrubtrack{width:88%;height:38px;border-radius:19px;background:#edf1ef;position:relative;overflow:hidden}
@@ -114,7 +111,7 @@
   <div class="legend"><b>━ rain %</b> &nbsp; <i>━ temp</i></div>
   <p id="summary"></p>
   <div id="hourly"><div id="status">Locating…</div></div>
-  <p class="endnote">Tap an hour for radar + scrub · tap a day for its outlook</p>
+  <p class="endnote">Tap an hour for forecast map + scrub · tap a day for its outlook</p>
 </div>
 
 <div id="detail">
@@ -130,7 +127,7 @@
     <div class="dstat"><div class="v" id="dgust"></div><div class="l">Gust mph</div></div>
   </div>
   <div id="dcond"></div>
-  <div id="dmap"><div id="noradar">forecast only —<br>radar doesn't reach this far ahead</div></div>
+  <div id="dmap"></div>
   <div id="scrub">
     <div id="scrubtrack"><div id="knob">∙</div></div>
     <div class="scrubhint">drag from centre — further = faster · swipe right above to go back</div>
@@ -262,21 +259,56 @@ function renderHourly(h){
     a.addEventListener("click",e=>{e.preventDefault();window.scrollTo({top:0,behavior:"smooth"});}));
 }
 
-const RADAR = {frames:[], host:"", layerDetail:null};
-function rainLayer(frame, opacity){
-  return L.tileLayer(`${RADAR.host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,
-    {opacity, maxNativeZoom:7, maxZoom:13});
+const GRID_N = 15, GRID_STEP = 0.025;
+let PRECIP_GRID = null, gridRects = [];
+
+function precipOpacity(mm) {
+  if (!mm || mm < 0.05) return 0;
+  return Math.min(0.85, 0.15 + Math.sqrt(mm / 5) * 0.7);
 }
-function baseLayer(){
-  return L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    {attribution:"© OpenStreetMap", maxZoom:13});
+
+async function loadPrecipGrid(pos) {
+  const half = Math.floor(GRID_N / 2) * GRID_STEP;
+  const lats = [], lons = [];
+  for (let r = 0; r < GRID_N; r++)
+    for (let c = 0; c < GRID_N; c++) {
+      lats.push((pos.lat - half + r * GRID_STEP).toFixed(4));
+      lons.push((pos.lon - half + c * GRID_STEP).toFixed(4));
+    }
+  const url = new URL('https://api.open-meteo.com/v1/forecast');
+  Object.entries({
+    latitude: lats.join(','), longitude: lons.join(','),
+    hourly: 'precipitation', models: 'ukmo_seamless',
+    forecast_days: 2, timezone: 'auto',
+  }).forEach(([k,v]) => url.searchParams.set(k,v));
+  const data = await fetch(url).then(r => r.json());
+  PRECIP_GRID = {
+    times:  data[0].hourly.time,
+    values: data.map(d => d.hourly.precipitation),
+    points: lats.map((lat, i) => ({ lat: +lat, lon: +lons[i] })),
+  };
+  initGridRects();
+  if (document.getElementById('detail').classList.contains('open')) updateDetail();
 }
-function loadRadarIndex(){
-  fetch("https://api.rainviewer.com/public/weather-maps.json")
-    .then(r=>r.json()).then(d=>{
-      RADAR.frames=[...d.radar.past,...d.radar.nowcast]; RADAR.host=d.host;
-      if(document.getElementById("detail").classList.contains("open")) updateDetail();
-    }).catch(()=>{});
+
+function initGridRects() {
+  if (!dmap || !PRECIP_GRID || gridRects.length) return;
+  const s2 = GRID_STEP / 2;
+  PRECIP_GRID.points.forEach(({ lat, lon }) => {
+    gridRects.push(L.rectangle(
+      [[lat - s2, lon - s2], [lat + s2, lon + s2]],
+      { weight: 0, fillColor: '#0d7fa3', fillOpacity: 0 }
+    ).addTo(dmap));
+  });
+}
+
+function updateGridHour(timeStr) {
+  if (!PRECIP_GRID || !gridRects.length) return;
+  const hi = PRECIP_GRID.times.indexOf(timeStr);
+  if (hi < 0) return;
+  gridRects.forEach((rect, i) =>
+    rect.setStyle({ fillOpacity: precipOpacity(PRECIP_GRID.values[i][hi]) })
+  );
 }
 
 let dmap=null, detailIdx=0;
@@ -285,8 +317,10 @@ function openDetail(i){
   document.getElementById("detail").classList.add("open");
   if(!dmap){
     dmap=L.map("dmap",{zoomControl:false}).setView([POS.lat,POS.lon],9);
-    baseLayer().addTo(dmap);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      {attribution:"© OpenStreetMap",maxZoom:13}).addTo(dmap);
     L.circleMarker([POS.lat,POS.lon],{radius:5,color:"#10222e",fillOpacity:1}).addTo(dmap);
+    initGridRects();
     initScrub(); initSwipeBack();
   }
   setTimeout(()=>dmap.invalidateSize(),50);
@@ -308,12 +342,7 @@ function updateDetail(){
   dw.classList.toggle("high",ws>=WIND_HIGH); dg.classList.toggle("high",wg>=WIND_HIGH);
   document.getElementById("dcond").textContent =
     ic(h.weather_code[i])+"  "+lbl(h.weather_code[i])+(h.precipitation[i]>0?" · "+h.precipitation[i].toFixed(1)+" mm":"");
-  const target=dt.getTime()/1000; let best=null,bestGap=1e12;
-  for(const f of RADAR.frames){ const g=Math.abs(f.time-target); if(g<bestGap){bestGap=g;best=f;} }
-  if(RADAR.layerDetail){ dmap.removeLayer(RADAR.layerDetail); RADAR.layerDetail=null; }
-  const noradar=document.getElementById("noradar");
-  if(best && bestGap<45*60){ RADAR.layerDetail=rainLayer(best,.7).addTo(dmap); noradar.style.display="none"; }
-  else noradar.style.display="flex";
+  updateGridHour(h.time[i]);
 }
 
 function initSwipeBack(){
@@ -359,7 +388,7 @@ function initScrub(){
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
   POS=await getPosition();
   document.getElementById("place").firstChild.textContent=POS.name+" ";
-  loadRadarIndex();
+  loadPrecipGrid(POS).catch(()=>{});
   let sample=false;
   try{ document.getElementById("status").textContent="Fetching UKMO forecast…"; WX=await loadForecast(POS); }
   catch(e){ WX=buildSampleData(); sample=true; }
