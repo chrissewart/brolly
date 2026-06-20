@@ -5,6 +5,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "test": "node --test tests/weather.test.mjs",
     "generate-icons": "node scripts/generate-icons.mjs"
   },
   "devDependencies": {
