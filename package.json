@@ -1,0 +1,13 @@
+{
+  "name": "brolly",
+  "version": "0.1.0",
+  "description": "UK weather PWA for runners",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "generate-icons": "node scripts/generate-icons.mjs"
+  },
+  "devDependencies": {
+    "sharp": "^0.33.5"
+  }
+}
