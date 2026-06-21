@@ -148,6 +148,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2023-10-20',   grid:'grid-wet-2023-10-20' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
+const VERSION = 'v3';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 function getNow() { return _nowOverride ? new Date(_nowOverride) : new Date(); }
@@ -367,7 +368,7 @@ async function loadDemo(scenario) {
     loadPrecipGrid(POS).catch(() => {});
     renderAll();
     document.getElementById('updated').textContent =
-      'updated ' + new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+      'updated ' + new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}) + ' · ' + VERSION;
     return;
   }
   tag.textContent = `Test: ${scenario.label}`;
@@ -383,7 +384,7 @@ async function loadDemo(scenario) {
   gridRects = [];
   if (dmap) initGridRects();
   renderAll();
-  document.getElementById('updated').textContent = `⚠ demo: ${scenario.label}`;
+  document.getElementById('updated').textContent = `⚠ demo: ${scenario.label} · ${VERSION}`;
 }
 
 let demoTaps = [];
@@ -452,8 +453,8 @@ function initScrub(){
   try{ document.getElementById("status").textContent="Fetching UKMO forecast…"; WX=await loadForecast(POS); }
   catch(e){ WX=buildSampleData(); sample=true; }
   renderAll();
-  document.getElementById("updated").textContent = sample?"⚠ sample data"
-    :"updated "+new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+  document.getElementById("updated").textContent = sample ? "⚠ sample data · " + VERSION
+    : "updated " + new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) + " · " + VERSION;
 })();
 </script>
 </body>
