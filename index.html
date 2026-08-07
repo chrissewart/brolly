@@ -148,7 +148,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v4';
+const VERSION = 'v5';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 function getNow() { return _nowOverride ? new Date(_nowOverride) : new Date(); }
@@ -277,9 +277,22 @@ function renderHourly(h){
 const GRID_N = 15, GRID_STEP = 0.025, GRID_STEP_MAX = 0.2;
 let PRECIP_GRID = null, gridRects = [], DEMO_ACTIVE = false;
 
-function precipOpacity(mm) {
-  if (!mm || mm < 0.05) return 0;
-  return Math.min(0.85, 0.15 + Math.sqrt(mm / 5) * 0.7);
+// Intensity colour ramp (light blue → blue → teal → yellow → orange → red)
+// like other radar apps use, instead of one fixed blue at varying opacity —
+// hue carries "how heavy", opacity still rises a bit with it for depth.
+const PRECIP_SCALE = [
+  [0.5,      '#a9d9f2'],  // drizzle
+  [1.5,      '#4f9fd8'],  // light
+  [3,        '#2fae8b'],  // moderate
+  [6,        '#e0c22f'],  // moderate–heavy
+  [12,       '#e0812f'],  // heavy
+  [Infinity, '#d1372f'],  // very heavy / extreme
+];
+function precipStyle(mm) {
+  if (!mm || mm < 0.05) return { fillOpacity: 0 };
+  const fillColor = PRECIP_SCALE.find(([th]) => mm < th)[1];
+  const fillOpacity = Math.min(0.82, 0.4 + Math.sqrt(mm / 10) * 0.42);
+  return { fillColor, fillOpacity };
 }
 
 function buildGridPoints(pos, step = GRID_STEP) {
@@ -348,9 +361,7 @@ function updateGridHour(timeStr) {
   if (!PRECIP_GRID || !gridRects.length) return;
   const hi = PRECIP_GRID.times.indexOf(timeStr);
   if (hi < 0) return;
-  gridRects.forEach((rect, i) =>
-    rect.setStyle({ fillOpacity: precipOpacity(PRECIP_GRID.values[i][hi]) })
-  );
+  gridRects.forEach((rect, i) => rect.setStyle(precipStyle(PRECIP_GRID.values[i][hi])));
 }
 
 // Grid point count (GRID_N²) stays fixed as you zoom out — only the spacing
@@ -376,17 +387,26 @@ let dmap=null, detailIdx=0;
 function openDetail(i){
   detailIdx=i;
   document.getElementById("detail").classList.add("open");
-  if(!dmap){
+  const firstOpen = !dmap;
+  if(firstOpen){
     dmap=L.map("dmap",{zoomControl:false});
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       {attribution:"© OpenStreetMap",maxZoom:13}).addTo(dmap);
     L.circleMarker([POS.lat,POS.lon],{radius:5,color:"#10222e",fillOpacity:1}).addTo(dmap);
-    fitGridView();
-    rebuildGridRects();
-    dmap.on('zoomend', onMapZoomEnd);
     initScrub(); initSwipeBack();
   }
-  setTimeout(()=>dmap.invalidateSize(),50);
+  // #dmap is inside a display:none panel until the "open" class above lands,
+  // so Leaflet reads a stale (often 0-size) container if measured synchronously.
+  // invalidateSize() first, THEN fit — otherwise fitBounds picks a zoom for
+  // the wrong container size and the grid ends up smaller than the real viewport.
+  setTimeout(()=>{
+    dmap.invalidateSize();
+    if(firstOpen){
+      fitGridView();
+      rebuildGridRects();
+      dmap.on('zoomend', onMapZoomEnd);
+    }
+  },50);
   updateDetail();
 }
 function closeDetail(){ document.getElementById("detail").classList.remove("open"); }
