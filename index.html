@@ -85,10 +85,11 @@
   .dhead button{font:inherit;border:none;background:none;font-size:1rem;color:var(--rain);
                 cursor:pointer;padding:4px 8px}
   #dwhen{font-family:var(--mono);font-weight:700;font-size:1.05rem}
-  .dstats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 12px 12px;text-align:center}
+  .dstats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:0 12px 12px;text-align:center}
   .dstat .v{font-family:var(--mono);font-size:1.5rem;font-weight:700}
-  .dstat .v.rain{color:var(--rain)} .dstat .v.high{color:var(--wind)}
-  .dstat .v small{display:block;font-size:.42em;font-weight:600;color:var(--faint);margin-top:2px}
+  .dstat .v.rain{color:var(--rain)} .dstat .v.high{color:var(--wind)} .dstat .v.warm{color:var(--warm)}
+  .dstat .v.feels{color:var(--faint)}
+  .dstat .v small{font-size:.4em;font-weight:600;color:var(--faint);vertical-align:top;margin-left:1px}
   .dstat .l{font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;color:var(--faint)}
   #dcond{text-align:center;font-size:1rem;padding-bottom:10px}
   #dmap{flex:1;position:relative}
@@ -124,9 +125,10 @@
   </div>
   <div class="dstats">
     <div class="dstat"><div class="v" id="dtemp"></div><div class="l">Temp</div></div>
+    <div class="dstat"><div class="v feels" id="dfeels"></div><div class="l">Feels</div></div>
     <div class="dstat"><div class="v rain" id="drain"></div><div class="l">Rain</div></div>
-    <div class="dstat"><div class="v" id="dwind"></div><div class="l">Wind mph</div></div>
-    <div class="dstat"><div class="v" id="dgust"></div><div class="l">Gust mph</div></div>
+    <div class="dstat"><div class="v" id="dwind"></div><div class="l">Wind</div></div>
+    <div class="dstat"><div class="v" id="dgust"></div><div class="l">Gust</div></div>
   </div>
   <div id="dcond"></div>
   <div id="dmap"></div>
@@ -151,7 +153,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v16';
+const VERSION = 'v17';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -548,12 +550,15 @@ function updateDetail(){
   const ws=Math.round(h.wind_speed_10m[i]), wg=Math.round(h.wind_gusts_10m[i]);
   document.getElementById("dwhen").textContent =
     (isToday?"Today":DAYS[dt.getDay()])+" "+String(dt.getHours()).padStart(2,"0")+":00";
+  const temp = Math.round(h.temperature_2m[i]);
+  const dtempEl = document.getElementById("dtemp");
+  dtempEl.textContent = temp+"°";
+  dtempEl.classList.toggle("warm", temp>=20);
   const feels = feelsLikeValue(h.temperature_2m[i], h.apparent_temperature?.[i]);
-  document.getElementById("dtemp").innerHTML =
-    Math.round(h.temperature_2m[i])+"°"+(feels!=null?`<small>feels ${feels}°</small>`:"");
+  document.getElementById("dfeels").textContent = feels!=null ? feels+"°" : "–";
   document.getElementById("drain").textContent = h.precipitation_probability[i]==null?"–":h.precipitation_probability[i]+"%";
   const dw=document.getElementById("dwind"), dg=document.getElementById("dgust");
-  dw.textContent=ws; dg.textContent=wg;
+  dw.innerHTML = ws+"<small>mph</small>"; dg.innerHTML = wg+"<small>mph</small>";
   dw.classList.toggle("high",ws>=WIND_HIGH); dg.classList.toggle("high",wg>=WIND_HIGH);
   document.getElementById("dcond").textContent =
     ic(h.weather_code[i])+"  "+lbl(h.weather_code[i])+(h.precipitation[i]>0?" · "+h.precipitation[i].toFixed(1)+" mm":"");
