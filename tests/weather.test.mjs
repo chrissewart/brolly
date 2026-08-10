@@ -10,6 +10,7 @@ import {
   podProb, weekTempBounds, daySummaryText,
   buildSampleData,
   localDateStr, dropLeadingDays, sliceHourly, hourlyDayGroups,
+  feelsLikeSuffix,
 } from '../lib/weather.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -290,4 +291,27 @@ test('hourlyDayGroups respects fromIdx (partial first day)', () => {
 test('hourlyDayGroups on empty range returns no groups', () => {
   const h = {time:['2026-08-10T10:00']};
   assert.deepEqual(hourlyDayGroups(h, 1), []);
+});
+
+// ── feelsLikeSuffix ──────────────────────────────────────────────────────
+
+test('feelsLikeSuffix: rounds to same value → no suffix', () => {
+  assert.equal(feelsLikeSuffix(16.4, 16.1), '');
+});
+
+test('feelsLikeSuffix: colder feel → parenthesised suffix', () => {
+  assert.equal(feelsLikeSuffix(16, 13.6), '(14°)');
+});
+
+test('feelsLikeSuffix: warmer feel → parenthesised suffix', () => {
+  assert.equal(feelsLikeSuffix(21, 24.2), '(24°)');
+});
+
+test('feelsLikeSuffix: missing apparent temp → no suffix', () => {
+  assert.equal(feelsLikeSuffix(16, null), '');
+  assert.equal(feelsLikeSuffix(16, undefined), '');
+});
+
+test('feelsLikeSuffix: missing actual temp → no suffix', () => {
+  assert.equal(feelsLikeSuffix(null, 16), '');
 });

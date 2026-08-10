@@ -53,7 +53,7 @@
            padding:14px 0 6px;font-size:.78rem;font-weight:700;
            text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
            border-bottom:1px solid var(--rule)}
-  .hr{display:grid;grid-template-columns:3.4em 2em 3em 3em 3.6em 4.8em;
+  .hr{display:grid;grid-template-columns:3.4em 2em 4.2em 3em 3.3em 3.9em;
       align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid #ebeeec;
       font-family:var(--mono);font-size:1.05rem;cursor:pointer;
       -webkit-tap-highlight-color:transparent}
@@ -62,6 +62,8 @@
           filter:saturate(1.15) contrast(1.1)}
   .hr .tp{font-weight:700;text-align:right}
   .hr .tp.warm{color:var(--warm)}
+  .hr .tp small{font-weight:600;font-size:.62em;color:var(--faint);margin-left:.1em}
+  .hr .tp.warm small{color:var(--faint)}
   .hr .ri{font-size:.7rem;text-align:left;white-space:nowrap;line-height:1;opacity:.55;
           letter-spacing:-2px}
   .hr .pp{color:var(--rain);text-align:right;font-size:.95rem}
@@ -86,6 +88,7 @@
   .dstats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 12px 12px;text-align:center}
   .dstat .v{font-family:var(--mono);font-size:1.5rem;font-weight:700}
   .dstat .v.rain{color:var(--rain)} .dstat .v.high{color:var(--wind)}
+  .dstat .v small{display:block;font-size:.42em;font-weight:600;color:var(--faint);margin-top:2px}
   .dstat .l{font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;color:var(--faint)}
   #dcond{text-align:center;font-size:1rem;padding-bottom:10px}
   #dmap{flex:1;position:relative}
@@ -138,7 +141,7 @@
 import { ic, lbl, isRainCode, DROP, rainBars, DAYS, PODS,
          podProb, weekTempBounds, sparkline, daySummaryText,
          buildSampleData, localDateStr, dropLeadingDays, sliceHourly,
-         hourlyDayGroups } from './lib/weather.mjs';
+         hourlyDayGroups, feelsLikeSuffix } from './lib/weather.mjs';
 
 const FALLBACK = {lat:53.4631, lon:-2.2913, name:"Old Trafford"};
 const WIND_HIGH = 30;
@@ -148,7 +151,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v11';
+const VERSION = 'v12';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -178,7 +181,7 @@ async function loadForecast(pos){
   // UKMO: temp/wind/weather_code (no probability product).
   const u1 = new URL(base);
   Object.entries({...common,
-    hourly:"temperature_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m,weather_code",
+    hourly:"temperature_2m,apparent_temperature,wind_speed_10m,wind_gusts_10m,wind_direction_10m,weather_code",
     daily:"temperature_2m_max,temperature_2m_min,weather_code",
     models:"ukmo_seamless", wind_speed_unit:"mph"
   }).forEach(([k,v])=>u1.searchParams.set(k,v));
@@ -257,12 +260,13 @@ function hourRowHtml(h, i){
   const dt = new Date(h.time[i]);
   const p = h.precipitation_probability[i];
   const temp = Math.round(h.temperature_2m[i]);
+  const feels = feelsLikeSuffix(h.temperature_2m[i], h.apparent_temperature?.[i]);
   const ws = Math.round(h.wind_speed_10m[i]), wg = Math.round(h.wind_gusts_10m[i]);
   const high = ws>=WIND_HIGH || wg>=WIND_HIGH;
   return `<div class="hr" data-i="${i}">
     <span class="t">${String(dt.getHours()).padStart(2,"0")}:00</span>
     <span class="ic">${ic(h.weather_code[i])}</span>
-    <span class="tp${temp>=20?" warm":""}">${temp}°</span>
+    <span class="tp${temp>=20?" warm":""}">${temp}°${feels?`<small>${feels}</small>`:""}</span>
     <span class="ri">${rainBars(h.precipitation[i], h.weather_code[i], p)}</span>
     <span class="pp${(p??0)<20?" dry":""}">${p==null?"–":p+"%"}</span>
     <span class="wd${high?" high":""}"><span class="arrow" style="transform:rotate(${(h.wind_direction_10m[i]+180)%360}deg)">↑</span> ${ws}<small>/${wg}</small></span>
@@ -551,7 +555,9 @@ function updateDetail(){
   const ws=Math.round(h.wind_speed_10m[i]), wg=Math.round(h.wind_gusts_10m[i]);
   document.getElementById("dwhen").textContent =
     (isToday?"Today":DAYS[dt.getDay()])+" "+String(dt.getHours()).padStart(2,"0")+":00";
-  document.getElementById("dtemp").textContent = Math.round(h.temperature_2m[i])+"°";
+  const feels = feelsLikeSuffix(h.temperature_2m[i], h.apparent_temperature?.[i]);
+  document.getElementById("dtemp").innerHTML =
+    Math.round(h.temperature_2m[i])+"°"+(feels?`<small>feels ${feels.slice(1,-1)}</small>`:"");
   document.getElementById("drain").textContent = h.precipitation_probability[i]==null?"–":h.precipitation_probability[i]+"%";
   const dw=document.getElementById("dwind"), dg=document.getElementById("dgust");
   dw.textContent=ws; dg.textContent=wg;
