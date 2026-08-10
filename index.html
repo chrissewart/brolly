@@ -35,6 +35,8 @@
   .day{flex:0 0 auto;min-width:104px;padding:4px 10px;text-align:center;cursor:pointer;
        border-left:1px solid var(--rule);-webkit-tap-highlight-color:transparent}
   .day:first-child{border-left:none;padding-left:2px}
+  .day.active{box-shadow:inset 0 -2px 0 var(--rain)}
+  .day.active .dn{color:var(--rain)}
   .day .dn{font-size:.82rem;font-weight:650;text-transform:uppercase;letter-spacing:.04em}
   .day .ic{font-size:1.55rem;line-height:1.5}
   .day .temps{font-family:var(--mono);font-size:1rem}
@@ -153,7 +155,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v17';
+const VERSION = 'v18';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -312,6 +314,59 @@ function scrollToDay(dateStr){
   document.getElementById("hourly").scrollTo({top, behavior:"smooth"});
 }
 
+// Bidirectional companion to scrollToDay() above: as the hourly list is
+// scrolled, find whichever day's .dayhead is currently "stuck" at the top
+// and highlight + horizontally scroll the matching daily-strip card into
+// view. Reuses scrollToDay's exact "true top" math (first non-sticky row's
+// offsetTop, minus the dayhead's own height) — a sticky element's own
+// offsetTop is useless here (Chromium reports wherever it's *currently*
+// stuck, not its static position), but comparing each dayhead's real
+// static top against the live scrollTop is exactly the standard
+// "which sticky section header is active" algorithm, and it's the same
+// quirk this file already documented once, now used as the detection
+// signal instead of being worked around.
+let activeDayDate = null;
+function currentVisibleDay(){
+  const out = document.getElementById("hourly");
+  const heads = out.querySelectorAll(".dayhead");
+  let current = null;
+  for (const head of heads) {
+    const firstRow = head.nextElementSibling;
+    const top = (firstRow ? firstRow.offsetTop : head.offsetTop) - head.offsetHeight;
+    if (top <= out.scrollTop + 1) current = head; else break;
+  }
+  return current ? current.dataset.date : null;
+}
+
+function highlightDayCard(dateStr){
+  if (dateStr === activeDayDate) return;
+  activeDayDate = dateStr;
+  const daily = document.getElementById("daily");
+  daily.querySelectorAll(".day").forEach(c =>
+    c.classList.toggle("active", c.dataset.date === dateStr));
+  // Yesterday (if scrolled into) has no card at all — the daily strip
+  // only ever shows today..day+6 — so there's nothing to scroll to and no
+  // card ends up highlighted, which is the correct/only sensible behaviour.
+  const card = daily.querySelector(`.day[data-date="${dateStr}"]`);
+  if (card) card.scrollIntoView({behavior:"smooth", inline:"center", block:"nearest"});
+}
+
+let syncScrollQueued = false;
+function syncDailyToScroll(){
+  syncScrollQueued = false;
+  const date = currentVisibleDay();
+  if (date) highlightDayCard(date);
+}
+// #hourly itself is never recreated (only its innerHTML is, on every
+// render) so this listener is attached exactly once, not per-render.
+// requestAnimationFrame is a natural throttle here — at most once per
+// frame, however fast scroll events actually fire.
+document.getElementById("hourly").addEventListener("scroll", () => {
+  if (syncScrollQueued) return;
+  syncScrollQueued = true;
+  requestAnimationFrame(syncDailyToScroll);
+}, {passive:true});
+
 function renderHourly(h){
   const out = document.getElementById("hourly");
   const cur = getNow(); cur.setMinutes(0,0,0);
@@ -337,6 +392,15 @@ function renderHourly(h){
   const nowRow = out.querySelector(`.hr[data-i="${nowIdx}"]`);
   const todayHead = out.querySelector(`.dayhead[data-date="${todayStr}"]`);
   if(nowRow) out.scrollTop = nowRow.offsetTop - (todayHead ? todayHead.offsetHeight : 0);
+
+  // #hourly's own DOM just got rebuilt above (innerHTML) and #daily's did
+  // too (renderDaily, called just before this in renderAll()) — any
+  // previously-"active" card element no longer exists, so the equality
+  // guard in highlightDayCard() must not skip re-applying it just because
+  // the date string happens to be unchanged (e.g. a refresh-on-resume that
+  // lands back on the same day).
+  activeDayDate = null;
+  syncDailyToScroll();
 }
 
 // DETAIL_ZOOM 11 is chosen so a typical phone viewport's span at that zoom
