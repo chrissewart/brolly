@@ -40,7 +40,6 @@
   .day .temps{font-family:var(--mono);font-size:1rem}
   .day .temps b{font-weight:700}
   .day .temps span{color:var(--faint);font-size:.85rem}
-  .day.fade{opacity:.62}
   .spark{display:block;margin-top:5px;width:100%;height:30px}
   .axlbl{position:relative;height:.7em;margin-top:1px;
          font-size:.52rem;color:var(--faint);font-family:var(--mono)}
@@ -54,9 +53,6 @@
            padding:14px 0 6px;font-size:.78rem;font-weight:700;
            text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
            border-bottom:1px solid var(--rule)}
-  .dayhead.expandable{cursor:pointer;-webkit-tap-highlight-color:transparent}
-  .dayhead.expandable span::after{content:" \25BE";font-size:.7em;opacity:.6}
-  .dayhead.expandable.expanded span::after{content:" \25B4"}
   .daysec.pending{min-height:44px}
   .hr{display:grid;grid-template-columns:3.4em 2em 3em 3em 3.6em 4.8em;
       align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid #ebeeec;
@@ -77,7 +73,7 @@
   .hr .wd.high small{color:var(--wind)}
   .arrow{display:inline-block;color:var(--faint)}
   .hr .wd.high .arrow{color:var(--wind)}
-  #hourly{flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding-bottom:1.5rem}
+  #hourly{position:relative;flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding-bottom:1.5rem}
   #status{font-family:var(--mono);font-size:.8rem;color:var(--faint);padding:24px 0;text-align:center}
   .endnote{font-size:.72rem;color:var(--faint);margin-top:14px;text-align:center}
 
@@ -153,7 +149,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v9';
+const VERSION = 'v10';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -218,7 +214,7 @@ function renderDaily(d, h){
   const [tlo,thi] = weekTempBounds(h);
   el.innerHTML = d.time.map((t,i)=>{
     const dt = new Date(t+"T12:00");
-    return `<div class="day${i>=3?" fade":""}" data-date="${t}" data-idx="${i}">
+    return `<div class="day" data-date="${t}" data-idx="${i}">
       <div class="dn">${i===0?"Today":DAYS[dt.getDay()]}</div>
       <div class="ic">${ic(d.weather_code[i])}</div>
       <div class="temps"><b>${Math.round(d.temperature_2m_max[i])}°</b> <span>${Math.round(d.temperature_2m_min[i])}°</span></div>
@@ -228,8 +224,7 @@ function renderDaily(d, h){
   el.querySelectorAll(".day").forEach(card=>{
     card.addEventListener("click",()=>{
       showDaySummary(card.dataset.date, +card.dataset.idx);
-      const target = document.querySelector(`.dayhead[data-date="${card.dataset.date}"]`);
-      if(target) target.scrollIntoView({behavior:"smooth",block:"start"});
+      scrollToDay(card.dataset.date);
     });
   });
   // Triple-tap the last day card to cycle demo scenarios
@@ -279,68 +274,96 @@ function daySectionHtml(h, grp, label){
     + grp.idxs.map(i=>hourRowHtml(h,i)).join("");
 }
 
-// EAGER_DAYS renders immediately (today+tomorrow, as before); the rest of
-// the week is built lazily as each placeholder scrolls near the viewport —
-// see hourlyObserver below — so a full 7-day list never costs an upfront
-// DOM build. Yesterday (if PAST_DAYS fetched it) is built but kept hidden,
-// revealed by tapping Today's sticky header.
-const EAGER_DAYS = 2;
-let HOURS=[], hourlyObserver=null;
+// Yesterday, today and tomorrow render immediately (fixed, small cost); the
+// rest of the week is built lazily as each placeholder scrolls near the
+// viewport — see hourlyObserver below — so a full week's list never costs a
+// big upfront DOM build. The list *opens* scrolled to now (see the bottom
+// of renderHourly) so the default view looks the same as it always did —
+// scrolling up reveals the rest of today, then yesterday, same list, no
+// separate toggle.
+let HOURS=[], DAY_GROUPS=[], HOURLY=null, hourlyObserver=null;
+
+// Fills in a still-pending day's placeholder with its real content (used by
+// both the scroll observer below and scrollToDay, for a day tapped in the
+// daily strip before it's scrolled into view). Returns the day's .dayhead
+// element — already-materialized or non-existent days just look it up.
+function materializeDay(dateStr){
+  const out = document.getElementById("hourly");
+  const pending = out.querySelector(`.daysec.pending[data-date="${dateStr}"]`);
+  if(!pending) return out.querySelector(`.dayhead[data-date="${dateStr}"]`);
+  if(hourlyObserver) hourlyObserver.unobserve(pending);
+  const grp = DAY_GROUPS.find(g=>g.date===dateStr);
+  if(!grp) return null;
+  const tmp = document.createElement("div");
+  tmp.innerHTML = daySectionHtml(HOURLY, grp, pending.dataset.label);
+  const nodes = [...tmp.children];
+  pending.replaceWith(...nodes);
+  nodes.forEach(n=>{ if(n.classList.contains("hr")) n.addEventListener("click",()=>openDetail(+n.dataset.i)); });
+  return nodes[0];
+}
+
+// Jumps the hourly list to a given day (materializing it first if it's
+// still a lazy placeholder). Deliberately avoids both target.scrollIntoView()
+// *and* target.offsetTop: a sticky-positioned .dayhead that's already
+// visually pinned at the top of #hourly fools scrollIntoView into thinking
+// no scroll is needed — and worse, Chromium reports a sticky element's own
+// offsetTop as wherever it's *currently* stuck, not its static position in
+// the flow, so it's always ≈ the current scrollTop and useless as a target
+// (verified empirically, not assumed). The first hour row right after the
+// dayhead isn't sticky, so *its* offsetTop is a stable, scroll-independent
+// number — scroll there instead, offset up by the dayhead's own height so
+// it still ends up pinned above that row exactly as if we'd scrolled there
+// by hand.
+function scrollToDay(dateStr){
+  const target = materializeDay(dateStr);
+  if(!target) return;
+  const firstRow = target.nextElementSibling;
+  const top = (firstRow ? firstRow.offsetTop : target.offsetTop) - target.offsetHeight;
+  document.getElementById("hourly").scrollTo({top, behavior:"smooth"});
+}
+
 function renderHourly(h){
   const out = document.getElementById("hourly");
+  HOURLY = h;
   const cur = getNow(); cur.setMinutes(0,0,0);
-  const start = Math.max(h.time.findIndex(t=>new Date(t)>=cur),0);
-  const todayStr = h.time[start].slice(0,10);
+  const todayStr = localDateStr(getNow());
+  const tomorrowStr = new Date(new Date(todayStr).getTime()+86400e3).toISOString().slice(0,10);
+  const yesterdayStr = new Date(new Date(todayStr).getTime()-86400e3).toISOString().slice(0,10);
 
-  const groups = hourlyDayGroups(h, start);   // today (partial) .. last forecast day
+  const groups = hourlyDayGroups(h, 0);   // yesterday (if fetched) .. last forecast day
+  DAY_GROUPS = groups;
   HOURS = groups.flatMap(g=>g.idxs);
-  // Only PAST_DAYS=1 is ever fetched, so at most one group precedes today —
-  // whichever one doesn't match todayStr is it.
-  const yesterday = start>0 ? hourlyDayGroups(h,0).find(g=>g.date!==todayStr) ?? null : null;
+  const hasYesterday = groups.some(g=>g.date===yesterdayStr);
 
   let html = "";
-  if(yesterday) html += `<div id="ydaySec" style="display:none">${daySectionHtml(h,yesterday,"Yesterday")}</div>`;
-  groups.forEach((g,gi)=>{
-    const label = gi===0 ? "Today" : (()=>{const dt=new Date(g.date+"T00:00"); return DAYS[dt.getDay()]+" "+dt.getDate();})();
-    html += gi<EAGER_DAYS
+  groups.forEach(g=>{
+    const label = g.date===todayStr ? "Today" : g.date===yesterdayStr ? "Yesterday"
+      : (()=>{const dt=new Date(g.date+"T00:00"); return DAYS[dt.getDay()]+" "+dt.getDate();})();
+    html += g.date<=tomorrowStr
       ? daySectionHtml(h,g,label)
       : `<div class="daysec pending" data-date="${g.date}" data-label="${label}"></div>`;
   });
-  html += `<p class="endnote">Tap an hour for forecast map · tap Today to scroll back${yesterday?" · tap Today's header for yesterday":""}</p>`;
+  html += `<p class="endnote">Tap an hour for forecast map · tap a day above to jump to it${hasYesterday?" · scroll up for yesterday":""}</p>`;
   out.innerHTML = html;
 
   out.querySelectorAll(".hr").forEach(row=>row.addEventListener("click",()=>openDetail(+row.dataset.i)));
-
-  if(yesterday){
-    const ydaySec = document.getElementById("ydaySec");
-    const todayHead = out.querySelector(`.dayhead[data-date="${todayStr}"]`);
-    todayHead.classList.add("expandable");
-    todayHead.addEventListener("click",()=>{
-      const willShow = ydaySec.style.display==="none";
-      ydaySec.style.display = willShow ? "" : "none";
-      todayHead.classList.toggle("expanded",willShow);
-    });
-  }
 
   if(hourlyObserver) hourlyObserver.disconnect();
   const pending = out.querySelectorAll(".daysec.pending");
   if(pending.length){
     hourlyObserver = new IntersectionObserver(entries=>{
-      entries.forEach(entry=>{
-        if(!entry.isIntersecting) return;
-        const el = entry.target;
-        hourlyObserver.unobserve(el);
-        const grp = groups.find(g=>g.date===el.dataset.date);
-        if(!grp) return;
-        const tmp = document.createElement("div");
-        tmp.innerHTML = daySectionHtml(h, grp, el.dataset.label);
-        const nodes = [...tmp.children];
-        el.replaceWith(...nodes);
-        nodes.forEach(n=>{ if(n.classList.contains("hr")) n.addEventListener("click",()=>openDetail(+n.dataset.i)); });
-      });
+      entries.forEach(entry=>{ if(entry.isIntersecting) materializeDay(entry.target.dataset.date); });
     }, {root: out, rootMargin: "600px 0px"});
     pending.forEach(el=>hourlyObserver.observe(el));
   }
+
+  // Default view: scrolled to *now*, exactly as before — the whole day is
+  // in the DOM now (so it's scrollable further back), just positioned past
+  // the earlier hours rather than never rendering them.
+  const nowIdx = Math.max(0, h.time.findIndex(t=>new Date(t)>=cur));
+  const nowRow = out.querySelector(`.hr[data-i="${nowIdx}"]`);
+  const todayHead = out.querySelector(`.dayhead[data-date="${todayStr}"]`);
+  if(nowRow) out.scrollTop = nowRow.offsetTop - (todayHead ? todayHead.offsetHeight : 0);
 }
 
 // DETAIL_ZOOM 11 is chosen so a typical phone viewport's span at that zoom
