@@ -148,9 +148,14 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v7';
+const VERSION = 'v8';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
+// Refresh-on-resume: opening the app from background otherwise never
+// refetches (only a full quit+restart re-runs the page-load IIFE below) —
+// see backgroundRefresh() near the bottom.
+const STALE_MS = 10 * 60 * 1000; // 10 minutes
+let lastFetchAt = 0, refreshing = false;
 function getNow() { return _nowOverride ? new Date(_nowOverride) : new Date(); }
 
 function getPosition(){
@@ -455,6 +460,7 @@ async function loadDemo(scenario) {
     tag.textContent = 'UKMO';
     document.getElementById('updated').textContent = 'reloading…';
     try { WX = await loadForecast(POS); } catch(e) { WX = buildSampleData(); }
+    lastFetchAt = Date.now();
     DEMO_ACTIVE = false;
     DEMO_GRID = null;
     loadPrecipGrid(POS, dmap ? stepForBounds(dmap.getBounds()) : GRID_STEP).catch(() => {});
@@ -545,15 +551,43 @@ function initScrub(){
   let sample=false;
   try{ document.getElementById("status").textContent="Fetching UKMO forecast…"; WX=await loadForecast(POS); }
   catch(e){ WX=buildSampleData(); sample=true; }
+  lastFetchAt = Date.now();
   renderAll();
   document.getElementById("updated").textContent = sample ? "⚠ sample data · " + VERSION
     : "updated " + new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) + " · " + VERSION;
 })();
 
+// Refresh-on-resume: stale-while-revalidate — keep whatever's on screen and
+// only swap it for fresher data once the new fetch actually succeeds, so a
+// network hiccup on resume can't blank the view or replace good data with
+// the sample-data fallback. Skipped in demo mode so backgrounding the app
+// mid-test doesn't silently kick you out of the scenario you were looking at.
+async function backgroundRefresh() {
+  if (refreshing || DEMO_ACTIVE || !POS) return;
+  if (Date.now() - lastFetchAt < STALE_MS) return;
+  refreshing = true;
+  try {
+    WX = await loadForecast(POS);
+    lastFetchAt = Date.now();
+    renderAll();
+    document.getElementById("updated").textContent =
+      "updated " + new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) + " · " + VERSION;
+  } catch (e) {
+    // Keep showing what's already there — don't blank it, don't fall back to sample data.
+  } finally {
+    refreshing = false;
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') backgroundRefresh();
+});
+
 // Debug hook only — module scope isn't window scope, so expose live
 // internals for console/devtools inspection. No behavioural effect.
 window.__brolly = { get dmap(){return dmap}, get PRECIP_GRID(){return PRECIP_GRID},
-  get gridRects(){return gridRects}, get POS(){return POS}, get WX(){return WX} };
+  get gridRects(){return gridRects}, get POS(){return POS}, get WX(){return WX},
+  get lastFetchAt(){return lastFetchAt}, set lastFetchAt(v){lastFetchAt=v},
+  get DEMO_ACTIVE(){return DEMO_ACTIVE} };
 </script>
 </body>
 </html>
