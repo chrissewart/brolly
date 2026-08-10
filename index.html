@@ -60,10 +60,10 @@
   .hr .t{color:var(--faint);font-size:.9rem}
   .hr .ic{font-family:var(--sans);font-size:1.45rem;text-align:center;
           filter:saturate(1.15) contrast(1.1)}
-  .hr .tp{font-weight:700;text-align:right}
-  .hr .tp.warm{color:var(--warm)}
-  .hr .tp small{font-weight:600;font-size:.62em;color:var(--faint);margin-left:.1em}
-  .hr .tp.warm small{color:var(--faint)}
+  .hr .tp{text-align:right}
+  .hr .tp b{font-weight:700}
+  .hr .tp.warm b{color:var(--warm)}
+  .hr .tp span{font-size:.85em;color:var(--faint);margin-left:.1em}
   .hr .ri{font-size:.7rem;text-align:left;white-space:nowrap;line-height:1;opacity:.55;
           letter-spacing:-2px}
   .hr .pp{color:var(--rain);text-align:right;font-size:.95rem}
@@ -141,7 +141,7 @@
 import { ic, lbl, isRainCode, DROP, rainBars, DAYS, PODS,
          podProb, weekTempBounds, sparkline, daySummaryText,
          buildSampleData, localDateStr, dropLeadingDays, sliceHourly,
-         hourlyDayGroups, feelsLikeSuffix } from './lib/weather.mjs';
+         hourlyDayGroups, feelsLikeValue } from './lib/weather.mjs';
 
 const FALLBACK = {lat:53.4631, lon:-2.2913, name:"Old Trafford"};
 const WIND_HIGH = 30;
@@ -151,7 +151,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v12';
+const VERSION = 'v13';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -260,13 +260,13 @@ function hourRowHtml(h, i){
   const dt = new Date(h.time[i]);
   const p = h.precipitation_probability[i];
   const temp = Math.round(h.temperature_2m[i]);
-  const feels = feelsLikeSuffix(h.temperature_2m[i], h.apparent_temperature?.[i]);
+  const feels = feelsLikeValue(h.temperature_2m[i], h.apparent_temperature?.[i]);
   const ws = Math.round(h.wind_speed_10m[i]), wg = Math.round(h.wind_gusts_10m[i]);
   const high = ws>=WIND_HIGH || wg>=WIND_HIGH;
   return `<div class="hr" data-i="${i}">
     <span class="t">${String(dt.getHours()).padStart(2,"0")}:00</span>
     <span class="ic">${ic(h.weather_code[i])}</span>
-    <span class="tp${temp>=20?" warm":""}">${temp}°${feels?`<small>${feels}</small>`:""}</span>
+    <span class="tp${temp>=20?" warm":""}"><b>${temp}°</b>${feels!=null?` <span>${feels}°</span>`:""}</span>
     <span class="ri">${rainBars(h.precipitation[i], h.weather_code[i], p)}</span>
     <span class="pp${(p??0)<20?" dry":""}">${p==null?"–":p+"%"}</span>
     <span class="wd${high?" high":""}"><span class="arrow" style="transform:rotate(${(h.wind_direction_10m[i]+180)%360}deg)">↑</span> ${ws}<small>/${wg}</small></span>
@@ -555,9 +555,9 @@ function updateDetail(){
   const ws=Math.round(h.wind_speed_10m[i]), wg=Math.round(h.wind_gusts_10m[i]);
   document.getElementById("dwhen").textContent =
     (isToday?"Today":DAYS[dt.getDay()])+" "+String(dt.getHours()).padStart(2,"0")+":00";
-  const feels = feelsLikeSuffix(h.temperature_2m[i], h.apparent_temperature?.[i]);
+  const feels = feelsLikeValue(h.temperature_2m[i], h.apparent_temperature?.[i]);
   document.getElementById("dtemp").innerHTML =
-    Math.round(h.temperature_2m[i])+"°"+(feels?`<small>feels ${feels.slice(1,-1)}</small>`:"");
+    Math.round(h.temperature_2m[i])+"°"+(feels!=null?`<small>feels ${feels}°</small>`:"");
   document.getElementById("drain").textContent = h.precipitation_probability[i]==null?"–":h.precipitation_probability[i]+"%";
   const dw=document.getElementById("dwind"), dg=document.getElementById("dgust");
   dw.textContent=ws; dg.textContent=wg;

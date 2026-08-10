@@ -10,7 +10,7 @@ import {
   podProb, weekTempBounds, daySummaryText,
   buildSampleData,
   localDateStr, dropLeadingDays, sliceHourly, hourlyDayGroups,
-  feelsLikeSuffix,
+  feelsLikeValue,
 } from '../lib/weather.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -293,25 +293,25 @@ test('hourlyDayGroups on empty range returns no groups', () => {
   assert.deepEqual(hourlyDayGroups(h, 1), []);
 });
 
-// ── feelsLikeSuffix ──────────────────────────────────────────────────────
+// ── feelsLikeValue ───────────────────────────────────────────────────────
 
-test('feelsLikeSuffix: rounds to same value → no suffix', () => {
-  assert.equal(feelsLikeSuffix(16.4, 16.1), '');
+test('feelsLikeValue: rounds and returns even when equal to actual', () => {
+  assert.equal(feelsLikeValue(16.4, 16.1), 16);
 });
 
-test('feelsLikeSuffix: colder feel → parenthesised suffix', () => {
-  assert.equal(feelsLikeSuffix(16, 13.6), '(14°)');
+test('feelsLikeValue: colder feel', () => {
+  assert.equal(feelsLikeValue(16, 13.6), 14);
 });
 
-test('feelsLikeSuffix: warmer feel → parenthesised suffix', () => {
-  assert.equal(feelsLikeSuffix(21, 24.2), '(24°)');
+test('feelsLikeValue: warmer feel', () => {
+  assert.equal(feelsLikeValue(21, 24.2), 24);
 });
 
-test('feelsLikeSuffix: missing apparent temp → no suffix', () => {
-  assert.equal(feelsLikeSuffix(16, null), '');
-  assert.equal(feelsLikeSuffix(16, undefined), '');
+test('feelsLikeValue: missing apparent temp → null', () => {
+  assert.equal(feelsLikeValue(16, null), null);
+  assert.equal(feelsLikeValue(16, undefined), null);
 });
 
-test('feelsLikeSuffix: missing actual temp → no suffix', () => {
-  assert.equal(feelsLikeSuffix(null, 16), '');
+test('feelsLikeValue: missing actual temp → null', () => {
+  assert.equal(feelsLikeValue(null, 16), null);
 });
