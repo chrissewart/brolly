@@ -42,14 +42,21 @@ test('rain codes flagged correctly', () => {
 test('no rain → no drops', () =>
   assert.equal(rainBars(0, 0, 0), ''));
 
-test('trace rain (<0.5mm) → 1 drop', () =>
+test('light rain (<2.5mm, Met Office band) → 1 drop', () =>
   assert.equal(rainBars(0.3, 63, 80), DROP));
 
-test('moderate rain (0.5–2mm) → 2 drops', () =>
-  assert.equal(rainBars(1.0, 63, 80), DROP.repeat(2)));
+test('moderate rain (2.5–10mm, Met Office band) → 2 drops', () =>
+  assert.equal(rainBars(5.0, 63, 80), DROP.repeat(2)));
 
-test('heavy rain (≥2mm) → 3 drops', () =>
-  assert.equal(rainBars(3.5, 82, 95), DROP.repeat(3)));
+test('heavy rain (≥10mm, Met Office band) → 3 drops', () =>
+  assert.equal(rainBars(12, 82, 95), DROP.repeat(3)));
+
+test('rainBars: boundary values land in the band they round up into', () => {
+  assert.equal(rainBars(2.4, 63, 80), DROP);          // just under moderate
+  assert.equal(rainBars(2.5, 63, 80), DROP.repeat(2)); // moderate starts here
+  assert.equal(rainBars(9.9, 63, 80), DROP.repeat(2)); // just under heavy
+  assert.equal(rainBars(10, 63, 80), DROP.repeat(3));  // heavy starts here
+});
 
 test('0mm but heavy code → 3 drops', () =>
   assert.equal(rainBars(0, 82, null), DROP.repeat(3)));
