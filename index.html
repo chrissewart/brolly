@@ -35,8 +35,6 @@
   .day{flex:0 0 auto;min-width:104px;padding:4px 10px;text-align:center;cursor:pointer;
        border-left:1px solid var(--rule);-webkit-tap-highlight-color:transparent}
   .day:first-child{border-left:none;padding-left:2px}
-  .day.active{box-shadow:inset 0 -2px 0 var(--rain)}
-  .day.active .dn{color:var(--rain)}
   .day .dn{font-size:.82rem;font-weight:650;text-transform:uppercase;letter-spacing:.04em}
   .day .ic{font-size:1.55rem;line-height:1.5}
   .day .temps{font-family:var(--mono);font-size:1rem}
@@ -144,7 +142,7 @@
 <script type="module">
 import { ic, lbl, isRainCode, DROP, rainBars, DAYS, PODS,
          podProb, weekTempBounds, sparkline, daySummaryText,
-         buildSampleData, localDateStr, dropLeadingDays, sliceHourly,
+         buildSampleData, localDateStr,
          hourlyDayGroups, feelsLikeValue, rainColor } from './lib/weather.mjs';
 
 const FALLBACK = {lat:53.4631, lon:-2.2913, name:"Old Trafford"};
@@ -155,7 +153,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v18';
+const VERSION = 'v19';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -197,9 +195,13 @@ async function loadForecast(pos){
   const [r1,r2] = await Promise.all([fetch(u1.toString()), fetch(u2.toString())]);
   if(!r1.ok) throw new Error("HTTP "+r1.status);
   const main = await r1.json();
-  // The extra past_days is only wanted in the *hourly* look-back — the top
-  // week-strip should still start at today, so trim it back off .daily.
-  main.daily = dropLeadingDays(main.daily, PAST_DAYS);
+  // past_days applies uniformly to both .hourly and .daily, so .daily's
+  // leading entry is yesterday too — deliberately left in. An earlier
+  // version trimmed it back off here on the assumption the top week-strip
+  // should only ever start at today, but that meant yesterday had no card
+  // at all even once the hourly list grew a look-back day for it — scroll
+  // there and there was nothing to scroll the daily strip to. Keeping it
+  // gives yesterday a real card (icon/temps/sparkline) like every other day.
   try{
     const pr = await r2.json();
     const idx = new Map(pr.hourly.time.map((t,i)=>[t,i]));
@@ -215,13 +217,24 @@ async function loadForecast(pos){
 }
 
 
+// "Today"/"Yesterday" special-cased, everything else (including tomorrow)
+// just gets its weekday abbreviation — matches how the daily strip always
+// read before yesterday had a card of its own at all.
+function dayCardLabel(dateStr){
+  const todayStr = localDateStr(getNow());
+  if (dateStr===todayStr) return "Today";
+  const yesterdayStr = new Date(new Date(todayStr).getTime()-86400e3).toISOString().slice(0,10);
+  if (dateStr===yesterdayStr) return "Yesterday";
+  const dt = new Date(dateStr+"T12:00");
+  return DAYS[dt.getDay()];
+}
+
 function renderDaily(d, h){
   const el = document.getElementById("daily");
   const [tlo,thi] = weekTempBounds(h);
   el.innerHTML = d.time.map((t,i)=>{
-    const dt = new Date(t+"T12:00");
-    return `<div class="day" data-date="${t}" data-idx="${i}">
-      <div class="dn">${i===0?"Today":DAYS[dt.getDay()]}</div>
+    return `<div class="day" data-date="${t}">
+      <div class="dn">${dayCardLabel(t)}</div>
       <div class="ic">${ic(d.weather_code[i])}</div>
       <div class="temps"><b>${Math.round(d.temperature_2m_max[i])}°</b> <span>${Math.round(d.temperature_2m_min[i])}°</span></div>
       ${sparkline(h,t,tlo,thi)}
@@ -229,7 +242,7 @@ function renderDaily(d, h){
   }).join("");
   el.querySelectorAll(".day").forEach(card=>{
     card.addEventListener("click",()=>{
-      showDaySummary(card.dataset.date, +card.dataset.idx);
+      showDaySummary(card.dataset.date);
       scrollToDay(card.dataset.date);
     });
   });
@@ -245,9 +258,13 @@ function renderDaily(d, h){
   });
 }
 
-function showDaySummary(dateStr, idx){
-  const dt = new Date(dateStr+"T12:00");
-  const name = idx===0?"Today":idx===1?"Tomorrow":DAYS[dt.getDay()];
+function showDaySummary(dateStr){
+  // Tomorrow is the one label dayCardLabel() deliberately doesn't special-
+  // case (the daily strip just shows its weekday abbreviation) — but the
+  // summary sentence reads better with it, same as it always has.
+  const todayStr = localDateStr(getNow());
+  const tomorrowStr = new Date(new Date(todayStr).getTime()+86400e3).toISOString().slice(0,10);
+  const name = dateStr===tomorrowStr ? "Tomorrow" : dayCardLabel(dateStr);
   document.getElementById("summary").innerHTML = daySummaryText(WX.hourly, dateStr, name);
 }
 function defaultSummary(h){
@@ -316,15 +333,18 @@ function scrollToDay(dateStr){
 
 // Bidirectional companion to scrollToDay() above: as the hourly list is
 // scrolled, find whichever day's .dayhead is currently "stuck" at the top
-// and highlight + horizontally scroll the matching daily-strip card into
-// view. Reuses scrollToDay's exact "true top" math (first non-sticky row's
-// offsetTop, minus the dayhead's own height) — a sticky element's own
-// offsetTop is useless here (Chromium reports wherever it's *currently*
-// stuck, not its static position), but comparing each dayhead's real
-// static top against the live scrollTop is exactly the standard
-// "which sticky section header is active" algorithm, and it's the same
-// quirk this file already documented once, now used as the detection
-// signal instead of being worked around.
+// and horizontally scroll the matching daily-strip card into view. Reuses
+// scrollToDay's exact "true top" math (first non-sticky row's offsetTop,
+// minus the dayhead's own height) — a sticky element's own offsetTop is
+// useless here (Chromium reports wherever it's *currently* stuck, not its
+// static position), but comparing each dayhead's real static top against
+// the live scrollTop is exactly the standard "which sticky section header
+// is active" algorithm.
+// No visual highlight on the card itself any more — an earlier version
+// added a coloured underline, but it sat right where the sparkline draws
+// and read as part of the graph rather than a UI affordance. The day is
+// already labelled at the top of the hourly list itself; scrolling the
+// matching card into view is enough of a hint on its own.
 let activeDayDate = null;
 function currentVisibleDay(){
   const out = document.getElementById("hourly");
@@ -338,16 +358,10 @@ function currentVisibleDay(){
   return current ? current.dataset.date : null;
 }
 
-function highlightDayCard(dateStr){
+function scrollDailyStripTo(dateStr){
   if (dateStr === activeDayDate) return;
   activeDayDate = dateStr;
-  const daily = document.getElementById("daily");
-  daily.querySelectorAll(".day").forEach(c =>
-    c.classList.toggle("active", c.dataset.date === dateStr));
-  // Yesterday (if scrolled into) has no card at all — the daily strip
-  // only ever shows today..day+6 — so there's nothing to scroll to and no
-  // card ends up highlighted, which is the correct/only sensible behaviour.
-  const card = daily.querySelector(`.day[data-date="${dateStr}"]`);
+  const card = document.querySelector(`#daily .day[data-date="${dateStr}"]`);
   if (card) card.scrollIntoView({behavior:"smooth", inline:"center", block:"nearest"});
 }
 
@@ -355,7 +369,7 @@ let syncScrollQueued = false;
 function syncDailyToScroll(){
   syncScrollQueued = false;
   const date = currentVisibleDay();
-  if (date) highlightDayCard(date);
+  if (date) scrollDailyStripTo(date);
 }
 // #hourly itself is never recreated (only its innerHTML is, on every
 // render) so this listener is attached exactly once, not per-render.
@@ -565,12 +579,11 @@ function closeDetail(){ document.getElementById("detail").classList.remove("open
 document.getElementById("dclose").onclick = closeDetail;
 
 function renderAll() {
-  // WX.hourly now carries yesterday's look-back rows (see PAST_DAYS) — keep
-  // those out of the week-strip's temp bounds/sparklines, which should only
-  // ever reflect today onward.
-  const todayStr = localDateStr(getNow());
-  const todayIdx = Math.max(0, WX.hourly.time.findIndex(t=>t.slice(0,10)===todayStr));
-  renderDaily(WX.daily, sliceHourly(WX.hourly, todayIdx));
+  // WX.hourly carries yesterday's look-back rows (see PAST_DAYS) and so
+  // does WX.daily now — passed through unsliced, so yesterday's card gets
+  // a real sparkline/temp-bounds contribution like every other day instead
+  // of being excluded from the week strip entirely.
+  renderDaily(WX.daily, WX.hourly);
   defaultSummary(WX.hourly);
   renderHourly(WX.hourly);
 }

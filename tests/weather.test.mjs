@@ -9,7 +9,7 @@ import {
   DROP, rainBars,
   podProb, weekTempBounds, daySummaryText,
   buildSampleData,
-  localDateStr, dropLeadingDays, sliceHourly, hourlyDayGroups,
+  localDateStr, hourlyDayGroups,
   feelsLikeValue, rainColor, sparkline,
 } from '../lib/weather.mjs';
 
@@ -250,32 +250,12 @@ test('all fixtures have required hourly fields', () => {
   }
 });
 
-// ── localDateStr / dropLeadingDays / sliceHourly / hourlyDayGroups ─────────
+// ── localDateStr / hourlyDayGroups ──────────────────────────────────────
 // Backing "look back one day" + "7 days of hourly, lazily rendered".
 
 test('localDateStr zero-pads month and day', () => {
   assert.equal(localDateStr(new Date(2026, 0, 5)), '2026-01-05');
   assert.equal(localDateStr(new Date(2026, 10, 23)), '2026-11-23');
-});
-
-test('dropLeadingDays trims every array by n from the front', () => {
-  const daily = {time:['a','b','c'], temperature_2m_max:[1,2,3]};
-  assert.deepEqual(dropLeadingDays(daily, 1), {time:['b','c'], temperature_2m_max:[2,3]});
-});
-
-test('dropLeadingDays is a no-op for n=0', () => {
-  const daily = {time:['a','b']};
-  assert.equal(dropLeadingDays(daily, 0), daily); // same reference, no copy
-});
-
-test('sliceHourly trims every field in lockstep', () => {
-  const h = {time:['t0','t1','t2'], temperature_2m:[1,2,3]};
-  assert.deepEqual(sliceHourly(h, 1), {time:['t1','t2'], temperature_2m:[2,3]});
-});
-
-test('sliceHourly is a no-op for idx=0', () => {
-  const h = {time:['t0','t1']};
-  assert.equal(sliceHourly(h, 0), h);
 });
 
 test('hourlyDayGroups buckets consecutive hours by local date', () => {
