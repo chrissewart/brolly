@@ -151,7 +151,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v14';
+const VERSION = 'v15';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -346,13 +346,10 @@ function renderHourly(h){
 const GRID_N = 15, GRID_STEP = 0.025, GRID_STEP_MAX = 0.2, DETAIL_ZOOM = 11;
 let PRECIP_GRID = null, gridRects = [], DEMO_ACTIVE = false, DEMO_GRID = null;
 
-// Intensity colour ramp (light blue → blue → teal → yellow → orange → red)
-// like other radar apps use, instead of one fixed blue at varying opacity —
-// hue carries "how heavy", opacity still rises a bit with it for depth.
-// PRECIP_SCALE itself now lives in lib/weather.mjs (rainColor()) so the
-// daily-strip sparkline can share the exact same colour language — this
-// map keeps its own opacity curve, tuned for a full-size layer rather than
-// a ~30px glyph.
+// Colour: rainColor() (lib/weather.mjs) — one fixed hue, continuously
+// darkening with mm, shared with the daily-strip sparkline so "darker =
+// heavier" means the same thing in both views. This map keeps its own
+// opacity curve, tuned for a full-size layer rather than a ~30px glyph.
 function precipStyle(mm) {
   if (!mm || mm < 0.05) return { fillOpacity: 0 };
   const fillColor = rainColor(mm);

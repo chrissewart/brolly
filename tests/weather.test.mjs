@@ -10,7 +10,7 @@ import {
   podProb, weekTempBounds, daySummaryText,
   buildSampleData,
   localDateStr, dropLeadingDays, sliceHourly, hourlyDayGroups,
-  feelsLikeValue, rainColor, rainOpacity, sparkline,
+  feelsLikeValue, rainColor, sparkline,
 } from '../lib/weather.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -316,36 +316,37 @@ test('feelsLikeValue: missing actual temp → null', () => {
   assert.equal(feelsLikeValue(null, 16), null);
 });
 
-// ── rainColor / rainOpacity / sparkline intensity ───────────────────────
+// ── rainColor / sparkline intensity ─────────────────────────────────────
 
-test('rainColor: picks the correct band at each threshold boundary', () => {
-  assert.equal(rainColor(0), '#a9d9f2');
-  assert.equal(rainColor(0.49), '#a9d9f2');
-  assert.equal(rainColor(0.5), '#4f9fd8');
-  assert.equal(rainColor(3), '#e0c22f');
-  assert.equal(rainColor(12), '#d1372f');
-  assert.equal(rainColor(50), '#d1372f');
+test('rainColor: monotonically darkens as mm increases (no banding)', () => {
+  // Below the cap, every distinct mm level should map to a distinct shade —
+  // no jumping between a fixed set of bands.
+  const samples = [0, 0.5, 1, 2.4, 5, 10, 15].map(rainColor);
+  const uniqueCount = new Set(samples).size;
+  assert.equal(uniqueCount, samples.length, 'every mm level below the cap should map to a distinct shade');
 });
 
-test('rainColor: null/negative mm treated as zero (lightest band)', () => {
-  assert.equal(rainColor(null), '#a9d9f2');
-  assert.equal(rainColor(undefined), '#a9d9f2');
-  assert.equal(rainColor(-1), '#a9d9f2');
+test('rainColor: fixed hue throughout — always reads as blue, never drifts toward green/red', () => {
+  for (const mm of [0, 1, 2.4, 10, 30, 100]) {
+    const hex = rainColor(mm);
+    assert.match(hex, /^#[0-9a-f]{6}$/);
+    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+    assert.ok(b >= r, `expected blue-dominant colour for ${mm}mm, got ${hex}`);
+  }
 });
 
-test('rainOpacity: increases with mm but stays within [0.35, 0.85]', () => {
-  const o0 = rainOpacity(0), o1 = rainOpacity(1), o10 = rainOpacity(10), o100 = rainOpacity(100);
-  assert.ok(o0 >= 0.35 && o0 < o1);
-  assert.ok(o1 < o10);
-  assert.ok(o10 <= o100);
-  assert.ok(o100 <= 0.85);
+test('rainColor: caps out at full darkness beyond RAIN_CAP_MM, does not keep changing', () => {
+  assert.equal(rainColor(20), rainColor(50));
+  assert.equal(rainColor(20), rainColor(1000));
 });
 
-test('rainOpacity: null mm → floor opacity, same as zero', () => {
-  assert.equal(rainOpacity(null), rainOpacity(0));
+test('rainColor: null/negative mm treated as zero (lightest shade)', () => {
+  assert.equal(rainColor(null), rainColor(0));
+  assert.equal(rainColor(undefined), rainColor(0));
+  assert.equal(rainColor(-1), rainColor(0));
 });
 
-test('sparkline: emits one rect per known-probability hour, coloured by mm', () => {
+test('sparkline: gradient has one stop per known-probability hour, no per-hour rects', () => {
   const h = {
     time: ['2026-08-10T00:00', '2026-08-10T01:00', '2026-08-10T02:00'],
     precipitation_probability: [80, 20, null],
@@ -353,18 +354,21 @@ test('sparkline: emits one rect per known-probability hour, coloured by mm', () 
     temperature_2m: [10, 11, 12],
   };
   const svg = sparkline(h, '2026-08-10', 5, 15);
-  const rectCount = (svg.match(/<rect/g) || []).length;
-  // 1 background rect + 2 rain-probability rects (the null-probability hour is skipped)
-  assert.equal(rectCount, 3);
-  assert.ok(svg.includes(rainColor(8)));   // the heavy hour gets the heavy colour
-  assert.ok(svg.includes(rainColor(0.2))); // the light hour gets the light colour
+  // Only ever one background rect now — the rain area is a single gradient-
+  // filled <path>, not one <rect> per hour (that read as discrete bars with
+  // a visible gap between every hour).
+  assert.equal((svg.match(/<rect/g) || []).length, 1);
+  assert.equal((svg.match(/<stop/g) || []).length, 2); // the null-probability hour is skipped
+  assert.ok(svg.includes(rainColor(8)));
+  assert.ok(svg.includes(rainColor(0.2)));
+  assert.ok(svg.includes('linearGradient'));
 });
 
-test('sparkline: no known probability → no rain rects, empty string only when no hours match', () => {
+test('sparkline: no known probability → no gradient/rain area, empty string only when no hours match', () => {
   const h = { time: ['2026-08-10T00:00'], precipitation_probability: [null], precipitation: [null], temperature_2m: [10] };
   const svg = sparkline(h, '2026-08-10', 5, 15);
-  const rectCount = (svg.match(/<rect/g) || []).length;
-  assert.equal(rectCount, 1); // just the background rect, no rain bars
+  assert.equal((svg.match(/<stop/g) || []).length, 0);
+  assert.ok(!svg.includes('url(#rg'));
 });
 
 test('sparkline: unmatched date returns empty string', () => {
