@@ -141,7 +141,7 @@
 import { ic, lbl, isRainCode, DROP, rainBars, DAYS, PODS,
          podProb, weekTempBounds, sparkline, daySummaryText,
          buildSampleData, localDateStr, dropLeadingDays, sliceHourly,
-         hourlyDayGroups, feelsLikeValue } from './lib/weather.mjs';
+         hourlyDayGroups, feelsLikeValue, rainColor } from './lib/weather.mjs';
 
 const FALLBACK = {lat:53.4631, lon:-2.2913, name:"Old Trafford"};
 const WIND_HIGH = 30;
@@ -151,7 +151,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v13';
+const VERSION = 'v14';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -349,17 +349,13 @@ let PRECIP_GRID = null, gridRects = [], DEMO_ACTIVE = false, DEMO_GRID = null;
 // Intensity colour ramp (light blue → blue → teal → yellow → orange → red)
 // like other radar apps use, instead of one fixed blue at varying opacity —
 // hue carries "how heavy", opacity still rises a bit with it for depth.
-const PRECIP_SCALE = [
-  [0.5,      '#a9d9f2'],  // drizzle
-  [1.5,      '#4f9fd8'],  // light
-  [3,        '#2fae8b'],  // moderate
-  [6,        '#e0c22f'],  // moderate–heavy
-  [12,       '#e0812f'],  // heavy
-  [Infinity, '#d1372f'],  // very heavy / extreme
-];
+// PRECIP_SCALE itself now lives in lib/weather.mjs (rainColor()) so the
+// daily-strip sparkline can share the exact same colour language — this
+// map keeps its own opacity curve, tuned for a full-size layer rather than
+// a ~30px glyph.
 function precipStyle(mm) {
   if (!mm || mm < 0.05) return { fillOpacity: 0 };
-  const fillColor = PRECIP_SCALE.find(([th]) => mm < th)[1];
+  const fillColor = rainColor(mm);
   const fillOpacity = Math.min(0.82, 0.4 + Math.sqrt(mm / 10) * 0.42);
   return { fillColor, fillOpacity };
 }

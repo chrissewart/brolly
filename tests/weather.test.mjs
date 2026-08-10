@@ -10,7 +10,7 @@ import {
   podProb, weekTempBounds, daySummaryText,
   buildSampleData,
   localDateStr, dropLeadingDays, sliceHourly, hourlyDayGroups,
-  feelsLikeValue,
+  feelsLikeValue, rainColor, rainOpacity, sparkline,
 } from '../lib/weather.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -314,4 +314,60 @@ test('feelsLikeValue: missing apparent temp → null', () => {
 
 test('feelsLikeValue: missing actual temp → null', () => {
   assert.equal(feelsLikeValue(null, 16), null);
+});
+
+// ── rainColor / rainOpacity / sparkline intensity ───────────────────────
+
+test('rainColor: picks the correct band at each threshold boundary', () => {
+  assert.equal(rainColor(0), '#a9d9f2');
+  assert.equal(rainColor(0.49), '#a9d9f2');
+  assert.equal(rainColor(0.5), '#4f9fd8');
+  assert.equal(rainColor(3), '#e0c22f');
+  assert.equal(rainColor(12), '#d1372f');
+  assert.equal(rainColor(50), '#d1372f');
+});
+
+test('rainColor: null/negative mm treated as zero (lightest band)', () => {
+  assert.equal(rainColor(null), '#a9d9f2');
+  assert.equal(rainColor(undefined), '#a9d9f2');
+  assert.equal(rainColor(-1), '#a9d9f2');
+});
+
+test('rainOpacity: increases with mm but stays within [0.35, 0.85]', () => {
+  const o0 = rainOpacity(0), o1 = rainOpacity(1), o10 = rainOpacity(10), o100 = rainOpacity(100);
+  assert.ok(o0 >= 0.35 && o0 < o1);
+  assert.ok(o1 < o10);
+  assert.ok(o10 <= o100);
+  assert.ok(o100 <= 0.85);
+});
+
+test('rainOpacity: null mm → floor opacity, same as zero', () => {
+  assert.equal(rainOpacity(null), rainOpacity(0));
+});
+
+test('sparkline: emits one rect per known-probability hour, coloured by mm', () => {
+  const h = {
+    time: ['2026-08-10T00:00', '2026-08-10T01:00', '2026-08-10T02:00'],
+    precipitation_probability: [80, 20, null],
+    precipitation: [8, 0.2, null],
+    temperature_2m: [10, 11, 12],
+  };
+  const svg = sparkline(h, '2026-08-10', 5, 15);
+  const rectCount = (svg.match(/<rect/g) || []).length;
+  // 1 background rect + 2 rain-probability rects (the null-probability hour is skipped)
+  assert.equal(rectCount, 3);
+  assert.ok(svg.includes(rainColor(8)));   // the heavy hour gets the heavy colour
+  assert.ok(svg.includes(rainColor(0.2))); // the light hour gets the light colour
+});
+
+test('sparkline: no known probability → no rain rects, empty string only when no hours match', () => {
+  const h = { time: ['2026-08-10T00:00'], precipitation_probability: [null], precipitation: [null], temperature_2m: [10] };
+  const svg = sparkline(h, '2026-08-10', 5, 15);
+  const rectCount = (svg.match(/<rect/g) || []).length;
+  assert.equal(rectCount, 1); // just the background rect, no rain bars
+});
+
+test('sparkline: unmatched date returns empty string', () => {
+  const h = { time: ['2026-08-10T00:00'], precipitation_probability: [50], precipitation: [1], temperature_2m: [10] };
+  assert.equal(sparkline(h, '2099-01-01', 5, 15), '');
 });
