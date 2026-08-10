@@ -148,7 +148,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v6';
+const VERSION = 'v7';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 function getNow() { return _nowOverride ? new Date(_nowOverride) : new Date(); }
@@ -274,11 +274,14 @@ function renderHourly(h){
   out.querySelectorAll(".hr").forEach(row=>row.addEventListener("click",()=>openDetail(+row.dataset.i)));
 }
 
-const GRID_N = 15, GRID_STEP = 0.025, GRID_STEP_MAX = 0.2;
-let PRECIP_GRID = null, gridRects = [], DEMO_ACTIVE = false;
-// Tracks the in-flight/last grid fetch so openDetail() can wait for it
-// instead of racing it (see fitGridView()/openDetail below).
-let precipGridPromise = null, gridViewFitted = false;
+// DETAIL_ZOOM 11 is chosen so a typical phone viewport's span at that zoom
+// (~0.28°) comes in *under* the grid's floor size (GRID_STEP × (GRID_N-1) =
+// 0.35°) — meaning at the default zoom the grid (live or the fixed-size demo
+// fixture) slightly overfills the view instead of underfilling it. Zooming
+// out from there grows the live grid to match (see stepForBounds); demo
+// can't grow past its fixed 0.35° (see fetchDemoGrid).
+const GRID_N = 15, GRID_STEP = 0.025, GRID_STEP_MAX = 0.2, DETAIL_ZOOM = 11;
+let PRECIP_GRID = null, gridRects = [], DEMO_ACTIVE = false, DEMO_GRID = null;
 
 // Intensity colour ramp (light blue → blue → teal → yellow → orange → red)
 // like other radar apps use, instead of one fixed blue at varying opacity —
@@ -310,9 +313,10 @@ function buildGridPoints(pos, step = GRID_STEP) {
   return pts;
 }
 
-// Bounding box the current grid actually covers, so the map can be fit to it
-// (fill the view at default zoom) and so zoom-out can detect when the view
-// has outgrown it.
+// Bounding box the current grid actually covers — used by zoom-out to detect
+// when the view has outgrown it. (The view is never fit *to* the grid — see
+// openDetail: the view is set first, deterministically, and the grid is
+// sized to match it, not the other way round.)
 function gridBounds() {
   if (!PRECIP_GRID) return null;
   const s2 = PRECIP_GRID.step / 2;
@@ -322,13 +326,21 @@ function gridBounds() {
     [Math.max(...lats) + s2, Math.max(...lons) + s2]
   );
 }
-function fitGridView() {
-  const b = gridBounds();
-  if (b) { dmap.fitBounds(b); gridViewFitted = true; }
-  else dmap.setView([POS.lat, POS.lon], 9); // no grid yet — coarse fallback, corrected below once it arrives
+
+// Grid spacing needed for GRID_N points to cover `bounds` with a 15% margin
+// (so edges aren't clipped), capped to GRID_STEP_MAX. Point count never
+// changes — only spacing — so the request URL's length is constant
+// regardless of zoom (225 lat/lon pairs either way); zooming out just makes
+// each cell represent more km, the same trade-off real radar apps make.
+function stepForBounds(bounds) {
+  const span = Math.max(bounds.getNorth() - bounds.getSouth(), bounds.getEast() - bounds.getWest());
+  return Math.min(GRID_STEP_MAX, Math.max(GRID_STEP, span / (GRID_N - 1) * 1.15));
 }
 
-async function loadPrecipGrid(pos, step = GRID_STEP) {
+// The one seam between real weather and fixture playback — everything else
+// (openDetail, zoom-out reload, the live/demo toggle) just calls
+// loadPrecipGrid() and doesn't care which of these ran.
+async function fetchLiveGrid(pos, step) {
   const points = buildGridPoints(pos, step);
   const lats = points.map(p => p.lat.toFixed(4));
   const lons = points.map(p => p.lon.toFixed(4));
@@ -339,16 +351,22 @@ async function loadPrecipGrid(pos, step = GRID_STEP) {
     forecast_days: 2, timezone: 'auto',
   }).forEach(([k,v]) => url.searchParams.set(k,v));
   const data = await fetch(url).then(r => r.json());
-  PRECIP_GRID = { times: data[0].hourly.time, values: data.map(d => d.hourly.precipitation), points, step };
+  return { times: data[0].hourly.time, values: data.map(d => d.hourly.precipitation), points, step };
+}
+// Demo fixtures are a fixed 15×15/0.025° box captured ahead of time — they
+// can't be resized to an arbitrary `step`, so demo mode just hands back what
+// was loaded and ignores the request. Known gap: demo radar doesn't respond
+// to zoom-out. Fixing that for real needs wider pre-captured fixture data,
+// which is its own piece of work — flagged, not done here.
+async function fetchDemoGrid() { return DEMO_GRID; }
+async function fetchPrecipGrid(pos, step) {
+  return DEMO_ACTIVE ? fetchDemoGrid() : fetchLiveGrid(pos, step);
+}
+
+async function loadPrecipGrid(pos, step = GRID_STEP) {
+  PRECIP_GRID = await fetchPrecipGrid(pos, step);
   rebuildGridRects();
-  if (document.getElementById('detail').classList.contains('open')) {
-    // Safety net: if detail was opened before this fetch resolved, fitGridView()
-    // hit the zoom-9 fallback above and nothing re-fits the view on its own —
-    // catch up now that real coverage is known, but only the first time,
-    // so we never yank the view out from under someone who's since zoomed.
-    if (!gridViewFitted) fitGridView();
-    updateDetail();
-  }
+  if (document.getElementById('detail').classList.contains('open')) updateDetail();
 }
 
 // Always clears and rebuilds (rather than "only if empty") so it can be
@@ -375,10 +393,8 @@ function updateGridHour(timeStr) {
   gridRects.forEach((rect, i) => rect.setStyle(precipStyle(PRECIP_GRID.values[i][hi])));
 }
 
-// Grid point count (GRID_N²) stays fixed as you zoom out — only the spacing
-// between points widens, so API cost never grows, only per-cell resolution
-// shrinks (same trade-off real radar apps make when zoomed out). No-op in
-// demo mode: fixture data has no wider coverage to load.
+// No-op in demo mode: fixture data has no wider coverage to load (see
+// fetchDemoGrid above).
 let gridReloadTimer = null;
 function onMapZoomEnd() {
   if (!PRECIP_GRID || DEMO_ACTIVE) return;
@@ -386,16 +402,14 @@ function onMapZoomEnd() {
   gridReloadTimer = setTimeout(() => {
     const view = dmap.getBounds(), cov = gridBounds();
     if (cov && cov.contains(view)) return; // current grid already covers the view
-    const span = Math.max(view.getNorth() - view.getSouth(), view.getEast() - view.getWest());
-    const neededStep = span / (GRID_N - 1) * 1.15; // +15% margin
-    const newStep = Math.min(GRID_STEP_MAX, Math.max(GRID_STEP, neededStep));
+    const newStep = stepForBounds(view);
     if (Math.abs(newStep - PRECIP_GRID.step) < 0.001) return;
     loadPrecipGrid(POS, newStep).catch(() => {});
   }, 450);
 }
 
 let dmap=null, detailIdx=0;
-async function openDetail(i){
+function openDetail(i){
   detailIdx=i;
   document.getElementById("detail").classList.add("open");
   const firstOpen = !dmap;
@@ -406,23 +420,20 @@ async function openDetail(i){
     L.circleMarker([POS.lat,POS.lon],{radius:5,color:"#10222e",fillOpacity:1}).addTo(dmap);
     initScrub(); initSwipeBack();
   }
-  // The grid fetch runs in parallel with the forecast fetch from page load and
-  // can still be in flight the first time someone taps an hour (it's a heavier
-  // 225-point request). Wait for it — capped, so a slow/dead network doesn't
-  // hang the view open — so the very first fit below already has real
-  // coverage instead of hitting the zoom-9 fallback.
-  if (firstOpen && !PRECIP_GRID && precipGridPromise) {
-    await Promise.race([precipGridPromise, new Promise(r => setTimeout(r, 2500))]);
-  }
   // #dmap is inside a display:none panel until the "open" class above lands,
-  // so Leaflet reads a stale (often 0-size) container if measured synchronously.
-  // invalidateSize() first, THEN fit — otherwise fitBounds picks a zoom for
-  // the wrong container size and the grid ends up smaller than the real viewport.
+  // so Leaflet reads a stale (often 0-size) container if measured synchronously
+  // — invalidateSize() needs that settle time regardless of any data fetch.
   setTimeout(()=>{
     dmap.invalidateSize();
     if(firstOpen){
-      fitGridView();
-      rebuildGridRects();
+      // The view is set deterministically — fixed zoom, real (now-correct)
+      // container size — with no dependency on grid data, so it can't race
+      // it. The grid fetch is then *sized to match this view* via
+      // stepForBounds(); whichever order the tiles and the grid response
+      // actually arrive in, both end up drawn to the same bounds. No
+      // fit-after-fetch, no waiting on the network to draw the map.
+      dmap.setView([POS.lat, POS.lon], DETAIL_ZOOM);
+      loadPrecipGrid(POS, stepForBounds(dmap.getBounds())).catch(() => {});
       dmap.on('zoomend', onMapZoomEnd);
     }
   },50);
@@ -445,9 +456,8 @@ async function loadDemo(scenario) {
     document.getElementById('updated').textContent = 'reloading…';
     try { WX = await loadForecast(POS); } catch(e) { WX = buildSampleData(); }
     DEMO_ACTIVE = false;
-    PRECIP_GRID = null;
-    gridViewFitted = false; // loadPrecipGrid's completion will re-fit once real coverage is known
-    precipGridPromise = loadPrecipGrid(POS).catch(() => {});
+    DEMO_GRID = null;
+    loadPrecipGrid(POS, dmap ? stepForBounds(dmap.getBounds()) : GRID_STEP).catch(() => {});
     renderAll();
     document.getElementById('updated').textContent =
       'updated ' + new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}) + ' · ' + VERSION;
@@ -462,8 +472,8 @@ async function loadDemo(scenario) {
   _nowOverride = wx.hourly.time[0];  // time-travel to midnight of the fixture day
   WX = wx;
   DEMO_ACTIVE = true;
-  PRECIP_GRID = { times: grd.times, values: grd.values, points: buildGridPoints(POS), step: GRID_STEP };
-  if (dmap) { fitGridView(); rebuildGridRects(); }
+  DEMO_GRID = { times: grd.times, values: grd.values, points: buildGridPoints(POS, GRID_STEP), step: GRID_STEP };
+  if (dmap) loadPrecipGrid(POS).catch(() => {}); // routes to fetchDemoGrid; step arg is ignored/moot here
   renderAll();
   document.getElementById('updated').textContent = `⚠ demo: ${scenario.label} · ${VERSION}`;
 }
@@ -529,7 +539,9 @@ function initScrub(){
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
   POS=await getPosition();
   document.getElementById("place").firstChild.textContent=POS.name+" ";
-  precipGridPromise = loadPrecipGrid(POS).catch(()=>{});
+  // No eager grid prefetch here any more — openDetail() fetches its own,
+  // sized to the actual view, the first time someone opens the map. One
+  // fewer request on every page load for anyone who never taps into detail.
   let sample=false;
   try{ document.getElementById("status").textContent="Fetching UKMO forecast…"; WX=await loadForecast(POS); }
   catch(e){ WX=buildSampleData(); sample=true; }
@@ -537,6 +549,11 @@ function initScrub(){
   document.getElementById("updated").textContent = sample ? "⚠ sample data · " + VERSION
     : "updated " + new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) + " · " + VERSION;
 })();
+
+// Debug hook only — module scope isn't window scope, so expose live
+// internals for console/devtools inspection. No behavioural effect.
+window.__brolly = { get dmap(){return dmap}, get PRECIP_GRID(){return PRECIP_GRID},
+  get gridRects(){return gridRects}, get POS(){return POS}, get WX(){return WX} };
 </script>
 </body>
 </html>
