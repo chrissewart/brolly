@@ -54,6 +54,10 @@
            padding:14px 0 6px;font-size:.78rem;font-weight:700;
            text-transform:uppercase;letter-spacing:.1em;color:var(--faint);
            border-bottom:1px solid var(--rule)}
+  .dayhead.expandable{cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .dayhead.expandable span::after{content:" \25BE";font-size:.7em;opacity:.6}
+  .dayhead.expandable.expanded span::after{content:" \25B4"}
+  .daysec.pending{min-height:44px}
   .hr{display:grid;grid-template-columns:3.4em 2em 3em 3em 3.6em 4.8em;
       align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid #ebeeec;
       font-family:var(--mono);font-size:1.05rem;cursor:pointer;
@@ -138,7 +142,8 @@
 <script type="module">
 import { ic, lbl, isRainCode, DROP, rainBars, DAYS, PODS,
          podProb, weekTempBounds, sparkline, daySummaryText,
-         buildSampleData } from './lib/weather.mjs';
+         buildSampleData, localDateStr, dropLeadingDays, sliceHourly,
+         hourlyDayGroups } from './lib/weather.mjs';
 
 const FALLBACK = {lat:53.4631, lon:-2.2913, name:"Old Trafford"};
 const WIND_HIGH = 30;
@@ -148,7 +153,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v8';
+const VERSION = 'v9';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -167,9 +172,14 @@ function getPosition(){
   });
 }
 
+// Fetched purely so the hourly list can offer a look-back — see
+// [[project_roadmap]] "look back one day". Free: same request, one extra
+// day either side of `forecast_days`.
+const PAST_DAYS = 1;
+
 async function loadForecast(pos){
   const base = "https://api.open-meteo.com/v1/forecast";
-  const common = {latitude:pos.lat, longitude:pos.lon, timezone:"auto", forecast_days:7};
+  const common = {latitude:pos.lat, longitude:pos.lon, timezone:"auto", forecast_days:7, past_days:PAST_DAYS};
   // UKMO: temp/wind/weather_code (no probability product).
   const u1 = new URL(base);
   Object.entries({...common,
@@ -185,6 +195,9 @@ async function loadForecast(pos){
   const [r1,r2] = await Promise.all([fetch(u1.toString()), fetch(u2.toString())]);
   if(!r1.ok) throw new Error("HTTP "+r1.status);
   const main = await r1.json();
+  // The extra past_days is only wanted in the *hourly* look-back — the top
+  // week-strip should still start at today, so trim it back off .daily.
+  main.daily = dropLeadingDays(main.daily, PAST_DAYS);
   try{
     const pr = await r2.json();
     const idx = new Map(pr.hourly.time.map((t,i)=>[t,i]));
@@ -237,46 +250,97 @@ function showDaySummary(dateStr, idx){
   document.getElementById("summary").innerHTML = daySummaryText(WX.hourly, dateStr, name);
 }
 function defaultSummary(h){
-  const today = h.time[0].slice(0,10);
+  // Was h.time[0].slice(0,10) — broke once loadForecast started fetching a
+  // look-back day, since h.time[0] became yesterday. getNow() is the real
+  // anchor for "today" regardless of what the array happens to start at.
+  const today = localDateStr(getNow());
   const tmrw = new Date(new Date(today).getTime()+86400e3).toISOString().slice(0,10);
   document.getElementById("summary").innerHTML =
     daySummaryText(h,today,"Today")+" "+daySummaryText(h,tmrw,"Tomorrow");
 }
 
-let HOURS=[];
+function hourRowHtml(h, i){
+  const dt = new Date(h.time[i]);
+  const p = h.precipitation_probability[i];
+  const temp = Math.round(h.temperature_2m[i]);
+  const ws = Math.round(h.wind_speed_10m[i]), wg = Math.round(h.wind_gusts_10m[i]);
+  const high = ws>=WIND_HIGH || wg>=WIND_HIGH;
+  return `<div class="hr" data-i="${i}">
+    <span class="t">${String(dt.getHours()).padStart(2,"0")}:00</span>
+    <span class="ic">${ic(h.weather_code[i])}</span>
+    <span class="tp${temp>=20?" warm":""}">${temp}°</span>
+    <span class="ri">${rainBars(h.precipitation[i], h.weather_code[i], p)}</span>
+    <span class="pp${(p??0)<20?" dry":""}">${p==null?"–":p+"%"}</span>
+    <span class="wd${high?" high":""}"><span class="arrow" style="transform:rotate(${(h.wind_direction_10m[i]+180)%360}deg)">↑</span> ${ws}<small>/${wg}</small></span>
+  </div>`;
+}
+function daySectionHtml(h, grp, label){
+  return `<div class="dayhead" data-date="${grp.date}"><span>${label}</span></div>`
+    + grp.idxs.map(i=>hourRowHtml(h,i)).join("");
+}
+
+// EAGER_DAYS renders immediately (today+tomorrow, as before); the rest of
+// the week is built lazily as each placeholder scrolls near the viewport —
+// see hourlyObserver below — so a full 7-day list never costs an upfront
+// DOM build. Yesterday (if PAST_DAYS fetched it) is built but kept hidden,
+// revealed by tapping Today's sticky header.
+const EAGER_DAYS = 2;
+let HOURS=[], hourlyObserver=null;
 function renderHourly(h){
   const out = document.getElementById("hourly");
   const cur = getNow(); cur.setMinutes(0,0,0);
-  let html = "", lastDay = "";
   const start = Math.max(h.time.findIndex(t=>new Date(t)>=cur),0);
-  /* chop at the end of day+1 so day-after never half-appears */
-  const cutoffDate = new Date(new Date(h.time[start]).getTime()+2*86400e3).toDateString();
-  HOURS=[];
-  for(let i=start; i<h.time.length; i++){
-    const dt = new Date(h.time[i]);
-    if(dt.toDateString()===cutoffDate) break;
-    const dayKey = dt.toDateString();
-    if(dayKey!==lastDay){
-      lastDay = dayKey;
-      const label = dayKey===getNow().toDateString() ? "Today" : DAYS[dt.getDay()]+" "+dt.getDate();
-      html += `<div class="dayhead" data-date="${h.time[i].slice(0,10)}"><span>${label}</span></div>`;
-    }
-    const p = h.precipitation_probability[i];
-    const temp = Math.round(h.temperature_2m[i]);
-    const ws = Math.round(h.wind_speed_10m[i]), wg = Math.round(h.wind_gusts_10m[i]);
-    const high = ws>=WIND_HIGH || wg>=WIND_HIGH;
-    HOURS.push(i);
-    html += `<div class="hr" data-i="${i}">
-      <span class="t">${String(dt.getHours()).padStart(2,"0")}:00</span>
-      <span class="ic">${ic(h.weather_code[i])}</span>
-      <span class="tp${temp>=20?" warm":""}">${temp}°</span>
-      <span class="ri">${rainBars(h.precipitation[i], h.weather_code[i], p)}</span>
-      <span class="pp${(p??0)<20?" dry":""}">${p==null?"–":p+"%"}</span>
-      <span class="wd${high?" high":""}"><span class="arrow" style="transform:rotate(${(h.wind_direction_10m[i]+180)%360}deg)">↑</span> ${ws}<small>/${wg}</small></span>
-    </div>`;
-  }
-  out.innerHTML = html + '<p class="endnote">Tap an hour for forecast map · tap Today to scroll back</p>';
+  const todayStr = h.time[start].slice(0,10);
+
+  const groups = hourlyDayGroups(h, start);   // today (partial) .. last forecast day
+  HOURS = groups.flatMap(g=>g.idxs);
+  // Only PAST_DAYS=1 is ever fetched, so at most one group precedes today —
+  // whichever one doesn't match todayStr is it.
+  const yesterday = start>0 ? hourlyDayGroups(h,0).find(g=>g.date!==todayStr) ?? null : null;
+
+  let html = "";
+  if(yesterday) html += `<div id="ydaySec" style="display:none">${daySectionHtml(h,yesterday,"Yesterday")}</div>`;
+  groups.forEach((g,gi)=>{
+    const label = gi===0 ? "Today" : (()=>{const dt=new Date(g.date+"T00:00"); return DAYS[dt.getDay()]+" "+dt.getDate();})();
+    html += gi<EAGER_DAYS
+      ? daySectionHtml(h,g,label)
+      : `<div class="daysec pending" data-date="${g.date}" data-label="${label}"></div>`;
+  });
+  html += `<p class="endnote">Tap an hour for forecast map · tap Today to scroll back${yesterday?" · tap Today's header for yesterday":""}</p>`;
+  out.innerHTML = html;
+
   out.querySelectorAll(".hr").forEach(row=>row.addEventListener("click",()=>openDetail(+row.dataset.i)));
+
+  if(yesterday){
+    const ydaySec = document.getElementById("ydaySec");
+    const todayHead = out.querySelector(`.dayhead[data-date="${todayStr}"]`);
+    todayHead.classList.add("expandable");
+    todayHead.addEventListener("click",()=>{
+      const willShow = ydaySec.style.display==="none";
+      ydaySec.style.display = willShow ? "" : "none";
+      todayHead.classList.toggle("expanded",willShow);
+    });
+  }
+
+  if(hourlyObserver) hourlyObserver.disconnect();
+  const pending = out.querySelectorAll(".daysec.pending");
+  if(pending.length){
+    hourlyObserver = new IntersectionObserver(entries=>{
+      entries.forEach(entry=>{
+        if(!entry.isIntersecting) return;
+        const el = entry.target;
+        hourlyObserver.unobserve(el);
+        const grp = groups.find(g=>g.date===el.dataset.date);
+        if(!grp) return;
+        const tmp = document.createElement("div");
+        tmp.innerHTML = daySectionHtml(h, grp, el.dataset.label);
+        const nodes = [...tmp.children];
+        el.replaceWith(...nodes);
+        nodes.forEach(n=>{ if(n.classList.contains("hr")) n.addEventListener("click",()=>openDetail(+n.dataset.i)); });
+      });
+    }, {root: out, rootMargin: "600px 0px"});
+    pending.forEach(el=>hourlyObserver.observe(el));
+  }
 }
 
 // DETAIL_ZOOM 11 is chosen so a typical phone viewport's span at that zoom
@@ -448,7 +512,12 @@ function closeDetail(){ document.getElementById("detail").classList.remove("open
 document.getElementById("dclose").onclick = closeDetail;
 
 function renderAll() {
-  renderDaily(WX.daily, WX.hourly);
+  // WX.hourly now carries yesterday's look-back rows (see PAST_DAYS) — keep
+  // those out of the week-strip's temp bounds/sparklines, which should only
+  // ever reflect today onward.
+  const todayStr = localDateStr(getNow());
+  const todayIdx = Math.max(0, WX.hourly.time.findIndex(t=>t.slice(0,10)===todayStr));
+  renderDaily(WX.daily, sliceHourly(WX.hourly, todayIdx));
   defaultSummary(WX.hourly);
   renderHourly(WX.hourly);
 }

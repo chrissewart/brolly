@@ -9,6 +9,7 @@ import {
   DROP, rainBars,
   podProb, weekTempBounds, daySummaryText,
   buildSampleData,
+  localDateStr, dropLeadingDays, sliceHourly, hourlyDayGroups,
 } from '../lib/weather.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -239,4 +240,54 @@ test('all fixtures have required hourly fields', () => {
       assert.ok(field in fx.hourly, `${name} fixture missing hourly.${field}`);
     }
   }
+});
+
+// ── localDateStr / dropLeadingDays / sliceHourly / hourlyDayGroups ─────────
+// Backing "look back one day" + "7 days of hourly, lazily rendered".
+
+test('localDateStr zero-pads month and day', () => {
+  assert.equal(localDateStr(new Date(2026, 0, 5)), '2026-01-05');
+  assert.equal(localDateStr(new Date(2026, 10, 23)), '2026-11-23');
+});
+
+test('dropLeadingDays trims every array by n from the front', () => {
+  const daily = {time:['a','b','c'], temperature_2m_max:[1,2,3]};
+  assert.deepEqual(dropLeadingDays(daily, 1), {time:['b','c'], temperature_2m_max:[2,3]});
+});
+
+test('dropLeadingDays is a no-op for n=0', () => {
+  const daily = {time:['a','b']};
+  assert.equal(dropLeadingDays(daily, 0), daily); // same reference, no copy
+});
+
+test('sliceHourly trims every field in lockstep', () => {
+  const h = {time:['t0','t1','t2'], temperature_2m:[1,2,3]};
+  assert.deepEqual(sliceHourly(h, 1), {time:['t1','t2'], temperature_2m:[2,3]});
+});
+
+test('sliceHourly is a no-op for idx=0', () => {
+  const h = {time:['t0','t1']};
+  assert.equal(sliceHourly(h, 0), h);
+});
+
+test('hourlyDayGroups buckets consecutive hours by local date', () => {
+  const h = {time:[
+    '2026-08-10T22:00','2026-08-10T23:00',
+    '2026-08-11T00:00','2026-08-11T01:00','2026-08-11T02:00',
+  ]};
+  const groups = hourlyDayGroups(h);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups[0], {date:'2026-08-10', idxs:[0,1]});
+  assert.deepEqual(groups[1], {date:'2026-08-11', idxs:[2,3,4]});
+});
+
+test('hourlyDayGroups respects fromIdx (partial first day)', () => {
+  const h = {time:['2026-08-10T10:00','2026-08-10T11:00','2026-08-11T00:00']};
+  const groups = hourlyDayGroups(h, 1);
+  assert.deepEqual(groups, [{date:'2026-08-10', idxs:[1]}, {date:'2026-08-11', idxs:[2]}]);
+});
+
+test('hourlyDayGroups on empty range returns no groups', () => {
+  const h = {time:['2026-08-10T10:00']};
+  assert.deepEqual(hourlyDayGroups(h, 1), []);
 });

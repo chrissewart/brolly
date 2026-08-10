@@ -1,4 +1,4 @@
-const CACHE = 'brolly-v8';
+const CACHE = 'brolly-v9';
 
 self.addEventListener('install', e => {
   e.waitUntil(
