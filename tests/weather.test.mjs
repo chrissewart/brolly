@@ -11,6 +11,7 @@ import {
   buildSampleData,
   localDateStr, hourlyDayGroups,
   feelsLikeValue, rainColor, sparkline,
+  MAX_LOCATIONS, NEARBY_MILES, milesBetween, nearestLocation, formatGeocodeResult,
 } from '../lib/weather.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -362,3 +363,52 @@ test('sparkline: unmatched date returns empty string', () => {
   const h = { time: ['2026-08-10T00:00'], precipitation_probability: [50], precipitation: [1], temperature_2m: [10] };
   assert.equal(sparkline(h, '2099-01-01', 5, 15), '');
 });
+
+// ── Multiple locations ───────────────────────────────────────────────────
+
+test('milesBetween: same point is zero', () => {
+  const p = { lat: 53.4631, lon: -2.2913 };
+  assert.equal(milesBetween(p, p), 0);
+});
+
+test('milesBetween: Manchester to London is roughly 163 miles', () => {
+  const manchester = { lat: 53.4808, lon: -2.2426 };
+  const london = { lat: 51.5074, lon: -0.1278 };
+  const miles = milesBetween(manchester, london);
+  assert.ok(miles > 160 && miles < 166, `expected ~163, got ${miles}`);
+});
+
+test('milesBetween: two points 1 mile apart (north-south) round-trips close to 1', () => {
+  // ~1 degree of latitude is ~69 miles, so 1/69th of a degree is ~1 mile.
+  const a = { lat: 53.4631, lon: -2.2913 };
+  const b = { lat: 53.4631 + 1 / 69, lon: -2.2913 };
+  const miles = milesBetween(a, b);
+  assert.ok(miles > 0.9 && miles < 1.1, `expected ~1, got ${miles}`);
+});
+
+test('nearestLocation: null when no locations saved yet', () => {
+  assert.equal(nearestLocation({ lat: 53.46, lon: -2.29 }, []), null);
+});
+
+test('nearestLocation: picks the closest of several, not just the first', () => {
+  const pos = { lat: 53.4631, lon: -2.2913 }; // Old Trafford
+  const london = { id: 'a', lat: 51.5074, lon: -0.1278, name: 'London' };
+  const salford = { id: 'b', lat: 53.4875, lon: -2.2901, name: 'Salford' }; // ~2 miles away
+  const result = nearestLocation(pos, [london, salford]);
+  assert.equal(result.loc.id, 'b');
+  assert.ok(result.miles < NEARBY_MILES);
+});
+
+test('formatGeocodeResult: joins name, admin1, country', () => {
+  const r = formatGeocodeResult({ latitude: 51.5, longitude: -0.12, name: 'London', admin1: 'England', country: 'United Kingdom' });
+  assert.equal(r.lat, 51.5);
+  assert.equal(r.lon, -0.12);
+  assert.equal(r.name, 'London, England, United Kingdom');
+});
+
+test('formatGeocodeResult: skips missing admin1 (e.g. city-states)', () => {
+  const r = formatGeocodeResult({ latitude: 1.3, longitude: 103.8, name: 'Singapore', country: 'Singapore' });
+  assert.equal(r.name, 'Singapore, Singapore');
+});
+
+test('MAX_LOCATIONS is 4', () => assert.equal(MAX_LOCATIONS, 4));

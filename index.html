@@ -25,10 +25,30 @@
        -webkit-font-smoothing:antialiased;overscroll-behavior:none}
   .wrap{max-width:680px;margin:0 auto;padding:0 12px;height:100%;display:flex;flex-direction:column}
 
-  header{padding:14px 0 6px;display:flex;align-items:baseline;justify-content:space-between;gap:8px}
-  h1{font-size:1.1rem;font-weight:650}
+  header{padding:14px 0 6px;display:flex;align-items:baseline;justify-content:space-between;gap:8px;position:relative}
+  h1{font-size:1.1rem;font-weight:650;cursor:pointer;-webkit-tap-highlight-color:transparent}
   h1 small{font-weight:400;color:var(--faint);font-size:.8rem;margin-left:.4em}
   #updated{font-family:var(--mono);font-size:.68rem;color:var(--faint)}
+
+  #locmenu{position:absolute;top:100%;left:0;z-index:50;min-width:220px;max-width:88vw;
+           background:var(--paper);border:1px solid var(--rule);border-radius:10px;
+           box-shadow:0 6px 20px rgba(0,0,0,.14);padding:6px;display:none}
+  #locmenu.open{display:block}
+  .locitem{padding:9px 10px;border-radius:6px;cursor:pointer;font-size:.92rem;
+           -webkit-tap-highlight-color:transparent}
+  .locitem:active{background:#edf1ef}
+  .locsep{height:1px;background:var(--rule);margin:5px 2px}
+  .locaction{display:block;width:100%;text-align:left;font:inherit;font-size:.85rem;
+             border:none;background:none;color:var(--rain);padding:9px 10px;border-radius:6px;
+             cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .locaction:active{background:#edf1ef}
+  .locaction.danger{color:var(--wind)}
+  .locaction[disabled]{color:var(--faint);cursor:default}
+  .locaction[disabled]:active{background:none}
+  .locmsg{padding:6px 10px;font-size:.76rem;color:var(--faint)}
+  #locsearch{width:100%;padding:8px 9px;margin:4px 2px 2px;border:1px solid var(--rule);
+             border-radius:6px;font:inherit;font-size:.9rem;background:var(--paper);color:var(--ink)}
+  .locresults{max-height:40vh;overflow-y:auto}
 
   .daily{display:flex;overflow-x:auto;padding:8px 0 4px;scrollbar-width:none}
   .daily::-webkit-scrollbar{display:none}
@@ -111,6 +131,7 @@
   <header>
     <h1 id="place">Weather <small>UKMO</small></h1>
     <span id="updated"></span>
+    <div id="locmenu"></div>
   </header>
   <div class="daily" id="daily"></div>
   <div class="legend"><b>━ rain %</b> &nbsp; <i>━ temp</i></div>
@@ -144,7 +165,8 @@
 import { ic, lbl, isRainCode, DROP, rainBars, DAYS, PODS,
          podProb, weekTempBounds, sparkline, daySummaryText,
          buildSampleData, localDateStr,
-         hourlyDayGroups, feelsLikeValue, rainColor } from './lib/weather.mjs';
+         hourlyDayGroups, feelsLikeValue, rainColor,
+         MAX_LOCATIONS, NEARBY_MILES, nearestLocation, formatGeocodeResult } from './lib/weather.mjs';
 
 const FALLBACK = {lat:53.4631, lon:-2.2913, name:"Old Trafford"};
 const WIND_HIGH = 30;
@@ -164,14 +186,253 @@ const STALE_MS = 10 * 60 * 1000; // 10 minutes
 let lastFetchAt = 0, refreshing = false;
 function getNow() { return _nowOverride ? new Date(_nowOverride) : new Date(); }
 
-function getPosition(){
+// maximumAge:600000 (10min) is the right trade-off for app *load* — avoids
+// a slow GPS fix on every launch, a slightly-stale reading is fine there.
+// It's the wrong trade-off for the explicit "Add current location" menu
+// action, though: the whole point of tapping it is "where am I *right
+// now*", and a stale cached fix there would silently undermine the
+// ≥NEARBY_MILES near-duplicate check against whatever the real current
+// position actually is. `fresh:true` (used only by that call site) forces
+// maximumAge:0 — confirmed empirically (not just theorised) that
+// getCurrentPosition really does serve a stale cached position within
+// maximumAge even after the underlying location changes.
+function getPosition(fresh=false){
   return new Promise(res=>{
     if(!navigator.geolocation) return res(FALLBACK);
     navigator.geolocation.getCurrentPosition(
       p=>res({lat:p.coords.latitude, lon:p.coords.longitude, name:"Current location"}),
-      ()=>res(FALLBACK), {timeout:6000, maximumAge:600000});
+      ()=>res(FALLBACK), {timeout:6000, maximumAge: fresh?0:600000});
   });
 }
+
+// ── Multiple locations ───────────────────────────────────────────────────
+// Persisted location list (up to MAX_LOCATIONS, none "special"/home). See
+// [[project_roadmap]] item 5. LOCATIONS/ACTIVE_ID are the source of truth;
+// POS (used everywhere else in this file — radar grid, map marker, forecast
+// fetch) is just a pointer to whichever location is currently active.
+const LOCATIONS_KEY = 'brolly.locations.v1';
+const ACTIVE_KEY = 'brolly.activeLocationId.v1';
+let LOCATIONS = [];
+let ACTIVE_ID = null;
+
+function loadLocationsFromStorage(){
+  try{
+    const raw = JSON.parse(localStorage.getItem(LOCATIONS_KEY));
+    return Array.isArray(raw) ? raw : [];
+  }catch(e){ return []; }
+}
+function saveLocations(){ localStorage.setItem(LOCATIONS_KEY, JSON.stringify(LOCATIONS)); }
+function saveActiveId(){ localStorage.setItem(ACTIVE_KEY, ACTIVE_ID ?? ''); }
+function newLocationId(){
+  return (crypto.randomUUID ? crypto.randomUUID() : Date.now()+'-'+Math.random().toString(36).slice(2));
+}
+function activeLocation(){ return LOCATIONS.find(l=>l.id===ACTIVE_ID) || null; }
+
+// Real place name for a GPS fix — reverse-geocoded via Nominatim (same OSM
+// data already used for the radar map tiles), falling back to the generic
+// "Current location" label (the old behaviour, pre-multi-location) on any
+// failure. zoom=10 asks for town/suburb-level detail, not a full address.
+async function reverseGeocodeName(lat, lon){
+  try{
+    const url = new URL('https://nominatim.openstreetmap.org/reverse');
+    url.searchParams.set('format','jsonv2');
+    url.searchParams.set('lat', lat); url.searchParams.set('lon', lon);
+    url.searchParams.set('zoom','10');
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    const a = d.address || {};
+    return a.city || a.town || a.village || a.suburb || a.county
+      || (d.display_name ? d.display_name.split(',')[0] : null) || 'Current location';
+  }catch(e){ return 'Current location'; }
+}
+
+// Open-Meteo geocoding search (same vendor as the weather data itself).
+async function searchGeocode(query){
+  const url = new URL('https://geocoding-api.open-meteo.com/v1/search');
+  url.searchParams.set('name', query);
+  url.searchParams.set('count', '8');
+  url.searchParams.set('language', 'en');
+  url.searchParams.set('format', 'json');
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const d = await r.json();
+  return (d.results || []).map(formatGeocodeResult);
+}
+
+// First-ever run (or any user before this feature existed — there's no
+// prior locations concept to migrate, so an empty list is indistinguishable
+// from "brand new") auto-adds the current GPS location exactly like the old
+// single-location getPosition()/FALLBACK behaviour, so anyone who never
+// opens the location menu sees no change at all.
+async function initLocations(){
+  LOCATIONS = loadLocationsFromStorage();
+  ACTIVE_ID = localStorage.getItem(ACTIVE_KEY) || null;
+  if(LOCATIONS.length === 0){
+    const pos = await getPosition();
+    // FALLBACK already carries a real name ("Old Trafford"); only a genuine
+    // GPS fix needs reverse geocoding to turn coordinates into a name.
+    const name = pos.name === "Current location" ? await reverseGeocodeName(pos.lat, pos.lon) : pos.name;
+    const loc = {id:newLocationId(), lat:pos.lat, lon:pos.lon, name};
+    LOCATIONS = [loc];
+    ACTIVE_ID = loc.id;
+    saveLocations(); saveActiveId();
+  } else if(!ACTIVE_ID || !LOCATIONS.some(l=>l.id===ACTIVE_ID)){
+    ACTIVE_ID = LOCATIONS[0].id;
+    saveActiveId();
+  }
+  POS = activeLocation();
+}
+
+// Switches the active location and refetches — mirrors the stale-while-
+// revalidate pattern backgroundRefresh() already uses: keeps whatever's on
+// screen up until the new fetch actually succeeds, rather than blanking the
+// view while loading.
+async function switchLocation(loc){
+  ACTIVE_ID = loc.id;
+  saveActiveId();
+  POS = activeLocation();
+  document.getElementById("place").firstChild.textContent = POS.name+" ";
+  document.getElementById("updated").textContent = "loading…";
+  let sample=false;
+  try{ WX = await loadForecast(POS); } catch(e){ WX = buildSampleData(); sample=true; }
+  lastFetchAt = Date.now();
+  renderAll();
+  document.getElementById("updated").textContent = sample ? "⚠ sample data · " + VERSION
+    : "updated " + new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) + " · " + VERSION;
+  // Radar map (if it's ever been opened) needs to recentre on next open —
+  // handled by openDetail() comparing mapLocId against ACTIVE_ID, not here,
+  // since the map is usually not even created yet (lazy, first tap only).
+}
+
+function addLocation(loc){
+  LOCATIONS.push(loc);
+  saveLocations();
+  closeLocMenu();
+  switchLocation(loc);
+}
+
+// Removing the last remaining location is prevented outright (simpler than
+// resetting back to the zero-locations auto-add flow, and just as safe —
+// see [[project_roadmap]] item 5).
+function removeLocation(id){
+  if(LOCATIONS.length <= 1) return;
+  const removingActive = id === ACTIVE_ID;
+  LOCATIONS = LOCATIONS.filter(l=>l.id!==id);
+  saveLocations();
+  if(removingActive) switchLocation(LOCATIONS[0]);
+  else closeLocMenu();
+}
+
+// ── Location menu UI ─────────────────────────────────────────────────────
+let locMenuMsg = null, locMenuMode = 'list', locMenuBusy = false;
+function openLocMenu(){
+  locMenuMode = 'list'; locMenuMsg = null; locMenuBusy = false;
+  document.getElementById('locmenu').classList.add('open');
+  renderLocMenu();
+  setTimeout(()=>document.addEventListener('click', onDocClickCloseMenu), 0);
+}
+function closeLocMenu(){
+  document.getElementById('locmenu').classList.remove('open');
+  document.removeEventListener('click', onDocClickCloseMenu);
+}
+function onDocClickCloseMenu(e){
+  if(!e.target.closest('#locmenu') && !e.target.closest('#place')) closeLocMenu();
+}
+function toggleLocMenu(){
+  document.getElementById('locmenu').classList.contains('open') ? closeLocMenu() : openLocMenu();
+}
+
+function renderLocMenu(){
+  const el = document.getElementById('locmenu');
+  if(locMenuMode === 'search'){ renderLocSearch(el); return; }
+  const others = LOCATIONS.filter(l=>l.id!==ACTIVE_ID);
+  const atMax = LOCATIONS.length >= MAX_LOCATIONS;
+  const active = activeLocation();
+  el.innerHTML =
+    others.map(l=>`<div class="locitem" data-id="${l.id}">${l.name}</div>`).join("")
+    + (others.length ? '<div class="locsep"></div>' : '')
+    + (locMenuMsg ? `<div class="locmsg">${locMenuMsg}</div>` : '')
+    + `<button class="locaction" id="locAddGps" ${atMax||locMenuBusy?'disabled':''}>+ Add current location</button>`
+    + `<button class="locaction" id="locAddSearch" ${atMax||locMenuBusy?'disabled':''}>+ Add new location…</button>`
+    + `<button class="locaction danger" id="locRemove" ${LOCATIONS.length<=1||locMenuBusy?'disabled':''}>Remove ${active?active.name:''}</button>`;
+  el.querySelectorAll('.locitem').forEach(item=>{
+    item.addEventListener('click', ()=>{
+      const loc = LOCATIONS.find(l=>l.id===item.dataset.id);
+      closeLocMenu();
+      if(loc) switchLocation(loc);
+    });
+  });
+  const gpsBtn = document.getElementById('locAddGps');
+  if(gpsBtn) gpsBtn.addEventListener('click', onAddCurrentLocation);
+  const searchBtn = document.getElementById('locAddSearch');
+  if(searchBtn) searchBtn.addEventListener('click', ()=>{ locMenuMode='search'; locMenuMsg=null; renderLocMenu(); });
+  const removeBtn = document.getElementById('locRemove');
+  if(removeBtn) removeBtn.addEventListener('click', ()=>{ const a=activeLocation(); if(a) removeLocation(a.id); });
+}
+
+async function onAddCurrentLocation(){
+  locMenuBusy = true; locMenuMsg = 'Locating…'; renderLocMenu();
+  const pos = await getPosition(true); // force a fresh fix, not the 10min-cached one
+  const nearest = nearestLocation(pos, LOCATIONS);
+  if(nearest && nearest.miles < NEARBY_MILES){
+    locMenuBusy = false;
+    locMenuMsg = `Already have ${nearest.loc.name} nearby`;
+    renderLocMenu();
+    return;
+  }
+  const name = pos.name === "Current location" ? await reverseGeocodeName(pos.lat, pos.lon) : pos.name;
+  locMenuBusy = false;
+  addLocation({id:newLocationId(), lat:pos.lat, lon:pos.lon, name});
+}
+
+let locSearchToken = 0;
+function renderLocSearch(el){
+  el.innerHTML =
+    `<div class="locitem" id="locSearchBack">‹ Back</div>`
+    + `<input id="locsearch" type="text" placeholder="Search for a place…" autocomplete="off">`
+    + `<div class="locresults">${locMenuMsg ? `<div class="locmsg">${locMenuMsg}</div>` : ''}</div>`;
+  document.getElementById('locSearchBack').addEventListener('click', ()=>{ locMenuMode='list'; locMenuMsg=null; renderLocMenu(); });
+  const input = document.getElementById('locsearch');
+  input.focus();
+  let debounceTimer = null;
+  input.addEventListener('input', ()=>{
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if(q.length < 2){ ++locSearchToken; el.querySelector('.locresults').innerHTML = ''; return; }
+    debounceTimer = setTimeout(()=>runSearch(q, el), 300);
+  });
+}
+function runSearch(q, el){
+    const myToken = ++locSearchToken;
+    el.querySelector('.locresults').innerHTML = `<div class="locmsg">Searching…</div>`;
+    searchGeocode(q).then(results=>{
+      if(myToken !== locSearchToken) return; // a newer keystroke has already superseded this
+      const box = el.querySelector('.locresults');
+      if(!box) return;
+      box.innerHTML = results.length
+        ? results.map((r,i)=>`<div class="locitem" data-i="${i}">${r.name}</div>`).join("")
+        : `<div class="locmsg">No matches</div>`;
+      box.querySelectorAll('.locitem').forEach(item=>{
+        item.addEventListener('click', ()=>{
+          if(LOCATIONS.length >= MAX_LOCATIONS) return;
+          addLocation({id:newLocationId(), ...results[+item.dataset.i]});
+        });
+      });
+    }).catch(()=>{ if(myToken===locSearchToken){ const box=el.querySelector('.locresults'); if(box) box.innerHTML = `<div class="locmsg">Search failed</div>`; } });
+}
+document.getElementById('place').addEventListener('click', e=>{ e.stopPropagation(); toggleLocMenu(); });
+// #locmenu's own innerHTML gets rebuilt by nearly every action inside it
+// (switching mode, re-rendering the list after add/remove) — that detaches
+// the just-clicked element from the tree *during* the click's own bubble
+// phase, so by the time onDocClickCloseMenu's `e.target.closest('#locmenu')`
+// runs, the (now-detached) target has no ancestor to find, and it reads as
+// an outside click. Stopping propagation at the menu container, once, means
+// no click that originates inside the menu ever reaches the document
+// listener at all, regardless of what its own handler does to the DOM
+// afterward — simpler and more robust than stopping it individually in
+// every single item/button handler.
+document.getElementById('locmenu').addEventListener('click', e=>e.stopPropagation());
 
 // Fetched purely so the hourly list can offer a look-back — see
 // [[project_roadmap]] "look back one day". Free: same request, one extra
@@ -606,7 +867,7 @@ function onMapZoomEnd() {
   }, 450);
 }
 
-let dmap=null, detailIdx=0;
+let dmap=null, detailIdx=0, posMarker=null, mapLocId=null;
 function openDetail(i){
   detailIdx=i;
   document.getElementById("detail").classList.add("open");
@@ -615,24 +876,34 @@ function openDetail(i){
     dmap=L.map("dmap",{zoomControl:false});
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       {attribution:"© OpenStreetMap",maxZoom:13}).addTo(dmap);
-    L.circleMarker([POS.lat,POS.lon],{radius:5,color:"#10222e",fillOpacity:1}).addTo(dmap);
     initScrub(); initSwipeBack();
   }
+  // The map is created once, lazily, on first open — but which location is
+  // active can change between opens (the location menu only lives in the
+  // main view, behind #detail, so a switch can never happen while the map
+  // is visible; it can absolutely happen between one open and the next).
+  // mapLocId tracks which location the marker/view/grid were last built
+  // for, so a switch-then-reopen recentres exactly like a first-ever open,
+  // without re-running any of that work on every single open.
+  const needsRecentre = firstOpen || mapLocId !== ACTIVE_ID;
   // #dmap is inside a display:none panel until the "open" class above lands,
   // so Leaflet reads a stale (often 0-size) container if measured synchronously
   // — invalidateSize() needs that settle time regardless of any data fetch.
   setTimeout(()=>{
     dmap.invalidateSize();
-    if(firstOpen){
+    if(needsRecentre){
       // The view is set deterministically — fixed zoom, real (now-correct)
       // container size — with no dependency on grid data, so it can't race
       // it. The grid fetch is then *sized to match this view* via
       // stepForBounds(); whichever order the tiles and the grid response
       // actually arrive in, both end up drawn to the same bounds. No
       // fit-after-fetch, no waiting on the network to draw the map.
+      if(posMarker) dmap.removeLayer(posMarker);
+      posMarker = L.circleMarker([POS.lat,POS.lon],{radius:5,color:"#10222e",fillOpacity:1}).addTo(dmap);
       dmap.setView([POS.lat, POS.lon], DETAIL_ZOOM);
       loadPrecipGrid(POS, stepForBounds(dmap.getBounds())).catch(() => {});
-      dmap.on('zoomend', onMapZoomEnd);
+      mapLocId = ACTIVE_ID;
+      if(firstOpen) dmap.on('zoomend', onMapZoomEnd);
     }
   },50);
   updateDetail();
@@ -745,7 +1016,7 @@ function initScrub(){
 
 (async ()=>{
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
-  POS=await getPosition();
+  await initLocations(); // sets POS from the persisted/auto-added location list
   document.getElementById("place").firstChild.textContent=POS.name+" ";
   // No eager grid prefetch here any more — openDetail() fetches its own,
   // sized to the actual view, the first time someone opens the map. One
@@ -789,7 +1060,9 @@ document.addEventListener('visibilitychange', () => {
 window.__brolly = { get dmap(){return dmap}, get PRECIP_GRID(){return PRECIP_GRID},
   get gridRects(){return gridRects}, get POS(){return POS}, get WX(){return WX},
   get lastFetchAt(){return lastFetchAt}, set lastFetchAt(v){lastFetchAt=v},
-  get DEMO_ACTIVE(){return DEMO_ACTIVE} };
+  get DEMO_ACTIVE(){return DEMO_ACTIVE},
+  get LOCATIONS(){return LOCATIONS}, get ACTIVE_ID(){return ACTIVE_ID},
+  switchLocation, removeLocation, addLocation };
 </script>
 </body>
 </html>
