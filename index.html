@@ -30,24 +30,34 @@
   h1 small{font-weight:400;color:var(--faint);font-size:.8rem;margin-left:.4em}
   #updated{font-family:var(--mono);font-size:.68rem;color:var(--faint)}
 
-  #locmenu{position:absolute;top:100%;left:0;z-index:50;min-width:220px;max-width:88vw;
+  #locmenu{position:absolute;top:100%;left:0;z-index:50;min-width:250px;max-width:92vw;
            background:var(--paper);border:1px solid var(--rule);border-radius:10px;
            box-shadow:0 6px 20px rgba(0,0,0,.14);padding:6px;display:none}
   #locmenu.open{display:block}
-  .locitem{padding:9px 10px;border-radius:6px;cursor:pointer;font-size:.92rem;
+  /* Tap targets sized to Android's 48dp/iOS's 44pt minimum, not just
+     comfortable padding around the text — the original 9px padding around
+     ~1rem text landed closer to 34px tall, noticeably fiddly on a real
+     phone (flagged directly by the user after trying it). */
+  .locitem{min-height:48px;display:flex;align-items:center;padding:0 12px;
+           border-radius:6px;cursor:pointer;font-size:1rem;
            -webkit-tap-highlight-color:transparent}
   .locitem:active{background:#edf1ef}
-  .locsep{height:1px;background:var(--rule);margin:5px 2px}
-  .locaction{display:block;width:100%;text-align:left;font:inherit;font-size:.85rem;
-             border:none;background:none;color:var(--rain);padding:9px 10px;border-radius:6px;
-             cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .locsep{height:1px;background:var(--rule);margin:6px 2px}
+  .locaction{min-height:48px;display:flex;align-items:center;width:100%;text-align:left;
+             font:inherit;font-size:.92rem;border:none;background:none;color:var(--rain);
+             padding:0 12px;border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:transparent}
   .locaction:active{background:#edf1ef}
   .locaction.danger{color:var(--wind)}
   .locaction[disabled]{color:var(--faint);cursor:default}
   .locaction[disabled]:active{background:none}
-  .locmsg{padding:6px 10px;font-size:.76rem;color:var(--faint)}
-  #locsearch{width:100%;padding:8px 9px;margin:4px 2px 2px;border:1px solid var(--rule);
-             border-radius:6px;font:inherit;font-size:.9rem;background:var(--paper);color:var(--ink)}
+  .locmsg{padding:8px 12px;font-size:.8rem;color:var(--faint)}
+  /* font-size:16px, not a smaller rem value, specifically to stop iOS
+     Safari auto-zooming the page on focus (it does that for any text
+     input under 16px) — everything else in this menu can use rem, this
+     one field can't. */
+  #locsearch{width:100%;min-height:48px;padding:10px 12px;margin:4px 2px 2px;
+             border:1px solid var(--rule);border-radius:6px;font:inherit;
+             font-size:16px;background:var(--paper);color:var(--ink)}
   .locresults{max-height:40vh;overflow-y:auto}
 
   .daily{display:flex;overflow-x:auto;padding:8px 0 4px;scrollbar-width:none}
@@ -166,7 +176,8 @@ import { ic, lbl, isRainCode, DROP, rainBars, DAYS, PODS,
          podProb, weekTempBounds, sparkline, daySummaryText,
          buildSampleData, localDateStr,
          hourlyDayGroups, feelsLikeValue, rainColor,
-         MAX_LOCATIONS, NEARBY_MILES, nearestLocation, formatGeocodeResult } from './lib/weather.mjs';
+         MAX_LOCATIONS, NEARBY_MILES, nearestLocation, formatGeocodeResult,
+         rankGeocodeResults } from './lib/weather.mjs';
 
 const FALLBACK = {lat:53.4631, lon:-2.2913, name:"Old Trafford"};
 const WIND_HIGH = 30;
@@ -176,7 +187,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v21';
+const VERSION = 'v22';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -248,16 +259,34 @@ async function reverseGeocodeName(lat, lon){
 }
 
 // Open-Meteo geocoding search (same vendor as the weather data itself).
+// Restricted to the UK (countryCode=GB) — this is a UK weather app (UKMO
+// model data), and an unrestricted search buries the actual match under a
+// pile of same-named places elsewhere: searching "Newcastle" with no filter
+// returns Newcastle/Australia, Newcastle/South Africa, New Castle/PA etc.
+// *before* Newcastle upon Tyne, which on a phone with the keyboard up can
+// push the one relevant result below the fold entirely — reported directly
+// by the user hitting exactly that. GB filtering plus ranking by population
+// (rankGeocodeResults) together fix it: the England/Scotland/Wales/NI
+// "Newcastle"s that remain get sorted so the actual city surfaces first,
+// not whichever villages the API happened to list first.
+const SEARCH_COUNTRY_CODE = 'GB';
 async function searchGeocode(query){
   const url = new URL('https://geocoding-api.open-meteo.com/v1/search');
   url.searchParams.set('name', query);
-  url.searchParams.set('count', '8');
+  url.searchParams.set('count', '10');
   url.searchParams.set('language', 'en');
   url.searchParams.set('format', 'json');
+  url.searchParams.set('countryCode', SEARCH_COUNTRY_CODE);
   const r = await fetch(url);
   if(!r.ok) throw new Error('HTTP '+r.status);
   const d = await r.json();
-  return (d.results || []).map(formatGeocodeResult);
+  // Every result is UK now (countryCode=GB above), so the ", United
+  // Kingdom" formatGeocodeResult() would otherwise append to *every single
+  // row* is pure noise here — strip it, keeping the admin1 (England/
+  // Scotland/Wales/Northern Ireland) that's actually doing useful
+  // disambiguation work for repeated names like "Newcastle".
+  return rankGeocodeResults(d.results || []).map(formatGeocodeResult)
+    .map(r => ({...r, name: r.name.replace(/, United Kingdom$/, '')}));
 }
 
 // First-ever run (or any user before this feature existed — there's no
@@ -868,9 +897,22 @@ function onMapZoomEnd() {
 }
 
 let dmap=null, detailIdx=0, posMarker=null, mapLocId=null;
+// Android's OS-level "swipe from edge to go back" gesture (and the browser/
+// PWA back button generally) operates on session-history entries, not app
+// state — #detail was previously shown/hidden with nothing but a CSS class
+// toggle, so there was no history entry for that gesture to consume and it
+// fell straight through to exiting the app. Pushing one dummy state while
+// detail is open gives it something to consume first: a back gesture pops
+// straight to popstateClosesDetail below, which just closes the view;
+// only a *second* back (with no state left to pop) actually exits.
+let detailHistoryPushed = false;
 function openDetail(i){
   detailIdx=i;
   document.getElementById("detail").classList.add("open");
+  if(!detailHistoryPushed){
+    history.pushState({brollyDetail:true}, "");
+    detailHistoryPushed = true;
+  }
   const firstOpen = !dmap;
   if(firstOpen){
     dmap=L.map("dmap",{zoomControl:false});
@@ -908,8 +950,31 @@ function openDetail(i){
   },50);
   updateDetail();
 }
-function closeDetail(){ document.getElementById("detail").classList.remove("open"); }
+function closeDetail(){
+  document.getElementById("detail").classList.remove("open");
+  // Consume the pushState from openDetail() when *we're* the ones closing
+  // it (Back button, in-page swipe) — history.back() fires popstate too,
+  // but by then the "open" class is already gone, so popstateClosesDetail's
+  // own guard below is a no-op and this doesn't double-fire anything.
+  if(detailHistoryPushed){
+    detailHistoryPushed = false;
+    if(history.state && history.state.brollyDetail) history.back();
+  }
+}
 document.getElementById("dclose").onclick = closeDetail;
+// The other direction: a real back navigation (Android edge-swipe, browser/
+// PWA back button) pops our pushed state *without* going through
+// closeDetail() first — this is what actually closes the view for that
+// gesture instead of it falling through to exiting the app. Guarded on
+// #detail still being open so a popstate that happens for any other reason
+// (there's currently only ever the one state we push, but defensive) can't
+// mistakenly close something already closed.
+window.addEventListener("popstate", ()=>{
+  if(document.getElementById("detail").classList.contains("open")){
+    detailHistoryPushed = false;
+    document.getElementById("detail").classList.remove("open");
+  }
+});
 
 function renderAll() {
   // WX.hourly carries yesterday's look-back rows (see PAST_DAYS) and so

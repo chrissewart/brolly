@@ -12,6 +12,7 @@ import {
   localDateStr, hourlyDayGroups,
   feelsLikeValue, rainColor, sparkline,
   MAX_LOCATIONS, NEARBY_MILES, milesBetween, nearestLocation, formatGeocodeResult,
+  rankGeocodeResults,
 } from '../lib/weather.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -412,3 +413,24 @@ test('formatGeocodeResult: skips missing admin1 (e.g. city-states)', () => {
 });
 
 test('MAX_LOCATIONS is 4', () => assert.equal(MAX_LOCATIONS, 4));
+
+test('rankGeocodeResults: sorts by population descending', () => {
+  const results = [
+    { name: 'Newcastle', admin1: 'Wales', population: undefined },
+    { name: 'Newcastle upon Tyne', admin1: 'England', population: 300125 },
+    { name: 'Newcastleton', admin1: 'Scotland', population: 770 },
+  ];
+  const ranked = rankGeocodeResults(results);
+  assert.deepEqual(ranked.map(r => r.name), ['Newcastle upon Tyne', 'Newcastleton', 'Newcastle']);
+});
+
+test('rankGeocodeResults: does not mutate the input array', () => {
+  const results = [{ name: 'A', population: 1 }, { name: 'B', population: 100 }];
+  rankGeocodeResults(results);
+  assert.equal(results[0].name, 'A'); // original order untouched
+});
+
+test('rankGeocodeResults: all missing population keeps original (stable) order', () => {
+  const results = [{ name: 'A' }, { name: 'B' }, { name: 'C' }];
+  assert.deepEqual(rankGeocodeResults(results).map(r => r.name), ['A', 'B', 'C']);
+});
