@@ -35,6 +35,7 @@
   .day{flex:0 0 auto;min-width:104px;padding:4px 10px;text-align:center;cursor:pointer;
        border-left:1px solid var(--rule);-webkit-tap-highlight-color:transparent}
   .day:first-child{border-left:none;padding-left:2px}
+  .day.active .dn{color:var(--rain)}
   .day .dn{font-size:.82rem;font-weight:650;text-transform:uppercase;letter-spacing:.04em}
   .day .ic{font-size:1.55rem;line-height:1.5}
   .day .temps{font-family:var(--mono);font-size:1rem}
@@ -153,7 +154,7 @@ const DEMO_SCENARIOS = [
   { label:'Wet',   wx:'manchester-wet-2026-06-11',   grid:'grid-wet-2026-06-11' },
   { label:'Snow',  wx:'manchester-snow-2024-01-16',  grid:'grid-snow-2024-01-16' },
 ];
-const VERSION = 'v19';
+const VERSION = 'v20';
 let WX=null, POS=null, demoIdx=0;
 let _nowOverride = null;
 // Refresh-on-resume: opening the app from background otherwise never
@@ -229,6 +230,7 @@ function dayCardLabel(dateStr){
   return DAYS[dt.getDay()];
 }
 
+let dailyStripPositioned = false;
 function renderDaily(d, h){
   const el = document.getElementById("daily");
   const [tlo,thi] = weekTempBounds(h);
@@ -256,6 +258,26 @@ function renderDaily(d, h){
     demoIdx = (demoIdx + 1) % DEMO_SCENARIOS.length;
     loadDemo(DEMO_SCENARIOS[demoIdx]);
   });
+
+  // One-time-ever starting position: hide Yesterday off the left edge so
+  // the strip opens exactly as it always used to (Today flush left) even
+  // though Yesterday is now a real, scrollable card. Deliberately only
+  // done once per page load, not on every re-render (refresh-on-resume,
+  // demo toggle) — if the user has since scrolled the strip themselves,
+  // a background refresh shouldn't snap it back under them. Demo data has
+  // no Yesterday card at all, so this is a harmless no-op there regardless.
+  if (!dailyStripPositioned) {
+    dailyStripPositioned = true;
+    const todayCard = el.querySelector(`.day[data-date="${localDateStr(getNow())}"]`);
+    // getBoundingClientRect(), not offsetLeft: offsetLeft resolves against
+    // whichever ancestor is offsetParent (here, .wrap or higher, since
+    // neither .day nor #daily are positioned), which isn't the same origin
+    // as #daily's own content box the moment any ancestor has padding —
+    // .wrap does (12px), so offsetLeft overshot by exactly that much.
+    // getBoundingClientRect() is always viewport-relative regardless of
+    // positioning context, so a delta between two rects is unambiguous.
+    if (todayCard) el.scrollLeft += todayCard.getBoundingClientRect().left - el.getBoundingClientRect().left;
+  }
 }
 
 function showDaySummary(dateStr){
@@ -312,6 +334,33 @@ function daySectionHtml(h, grp, label){
 // it all upfront and remove the race entirely.
 let HOURS=[];
 
+// Sets the active day: toggles the blue day-name text (.day.active .dn —
+// an underline used to accompany it but sat right where the sparkline
+// draws and read as part of the graph, so that half was dropped) and, only
+// if the card is genuinely fully off-screen, scrolls the daily strip the
+// minimum distance needed to bring it flush against whichever edge it's
+// hidden past. Deliberately NOT scrollIntoView({inline:"center"}): centring
+// moves the strip on almost every day change (even when the card was
+// already visible), which is the main source of the "day scrolling is
+// janky" complaint — moving only when genuinely necessary, and only by the
+// overflow amount, means most day-to-day scrolling of the hourly list
+// causes no daily-strip motion at all.
+let activeDayDate = null;
+function setActiveDay(dateStr){
+  if (dateStr === activeDayDate) return;
+  activeDayDate = dateStr;
+  const daily = document.getElementById("daily");
+  daily.querySelectorAll(".day").forEach(c =>
+    c.classList.toggle("active", c.dataset.date === dateStr));
+  const card = daily.querySelector(`.day[data-date="${dateStr}"]`);
+  if (!card) return;
+  const cardRect = card.getBoundingClientRect(), dailyRect = daily.getBoundingClientRect();
+  const fullyHidden = cardRect.right <= dailyRect.left || cardRect.left >= dailyRect.right;
+  if (!fullyHidden) return;
+  const delta = cardRect.left < dailyRect.left ? cardRect.left - dailyRect.left : cardRect.right - dailyRect.right;
+  daily.scrollBy({left: delta, behavior:"smooth"});
+}
+
 // Jumps the hourly list to a given day. Deliberately avoids both
 // target.scrollIntoView() *and* target.offsetTop: a sticky-positioned
 // .dayhead that's already visually pinned at the top of #hourly fools
@@ -323,29 +372,48 @@ let HOURS=[];
 // offsetTop is a stable, scroll-independent number — scroll there instead,
 // offset up by the dayhead's own height so it still ends up pinned above
 // that row exactly as if we'd scrolled there by hand.
+//
+// Tapping a day is a *deterministic* jump — the destination is already
+// known — but the passive scroll-follow logic below (syncDailyToScroll)
+// used to keep recomputing "what's currently visible" off the live
+// scrollTop throughout the ensuing smooth-scroll animation, landing on
+// whatever day happened to be passing by at each intermediate frame before
+// finally settling back on the real target once the animation finished.
+// That's the exact bug reported: "hours scroll, then day moves... another
+// day is briefly highlighted as it scrolls by before the originally
+// tapped day is scrolled back." Fix: set the real destination immediately
+// (setActiveDay call below) and suppress the passive detector for the
+// duration of the animation, rather than let it fight a scroll it didn't
+// initiate. `programmaticScrollToken` guards against a second tap landing
+// mid-animation: only the *latest* tap's completion is allowed to release
+// the suppression, so an in-flight earlier tap's scrollend/timeout can't
+// prematurely resume passive tracking out from under the newer one.
+let programmaticScroll = false, programmaticScrollToken = 0;
 function scrollToDay(dateStr){
   const target = document.querySelector(`.dayhead[data-date="${dateStr}"]`);
   if(!target) return;
   const firstRow = target.nextElementSibling;
   const top = (firstRow ? firstRow.offsetTop : target.offsetTop) - target.offsetHeight;
-  document.getElementById("hourly").scrollTo({top, behavior:"smooth"});
+  programmaticScroll = true;
+  const myToken = ++programmaticScrollToken;
+  setActiveDay(dateStr);
+  const out = document.getElementById("hourly");
+  out.scrollTo({top, behavior:"smooth"});
+  const finish = () => { if (myToken === programmaticScrollToken) programmaticScroll = false; };
+  out.addEventListener("scrollend", finish, {once:true});
+  setTimeout(finish, 900); // fallback if scrollend isn't supported
 }
 
 // Bidirectional companion to scrollToDay() above: as the hourly list is
-// scrolled, find whichever day's .dayhead is currently "stuck" at the top
-// and horizontally scroll the matching daily-strip card into view. Reuses
+// scrolled *by the user* (not by scrollToDay's own programmatic jump —
+// see programmaticScroll above), find whichever day's .dayhead is
+// currently "stuck" at the top and hand it to setActiveDay(). Reuses
 // scrollToDay's exact "true top" math (first non-sticky row's offsetTop,
 // minus the dayhead's own height) — a sticky element's own offsetTop is
 // useless here (Chromium reports wherever it's *currently* stuck, not its
 // static position), but comparing each dayhead's real static top against
 // the live scrollTop is exactly the standard "which sticky section header
 // is active" algorithm.
-// No visual highlight on the card itself any more — an earlier version
-// added a coloured underline, but it sat right where the sparkline draws
-// and read as part of the graph rather than a UI affordance. The day is
-// already labelled at the top of the hourly list itself; scrolling the
-// matching card into view is enough of a hint on its own.
-let activeDayDate = null;
 function currentVisibleDay(){
   const out = document.getElementById("hourly");
   const heads = out.querySelectorAll(".dayhead");
@@ -358,18 +426,12 @@ function currentVisibleDay(){
   return current ? current.dataset.date : null;
 }
 
-function scrollDailyStripTo(dateStr){
-  if (dateStr === activeDayDate) return;
-  activeDayDate = dateStr;
-  const card = document.querySelector(`#daily .day[data-date="${dateStr}"]`);
-  if (card) card.scrollIntoView({behavior:"smooth", inline:"center", block:"nearest"});
-}
-
 let syncScrollQueued = false;
 function syncDailyToScroll(){
   syncScrollQueued = false;
+  if (programmaticScroll) return;
   const date = currentVisibleDay();
-  if (date) scrollDailyStripTo(date);
+  if (date) setActiveDay(date);
 }
 // #hourly itself is never recreated (only its innerHTML is, on every
 // render) so this listener is attached exactly once, not per-render.
